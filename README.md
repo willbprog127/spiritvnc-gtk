@@ -7,3 +7,5 @@ This version of SpiritVNC is built using GTK 3 and the gtk-vnc widget.  Some fea
 
 ### Known issues ###
 Clipboard ops are on-hold due to this bug: https://gitlab.gnome.org/GNOME/gtk-vnc/-/issues/35  There is also a gtk-vnc bug on Windows that prevents _any_ connection: https://github.com/msys2/MINGW-packages/issues/23948
+
+![spiritvnc-gtk-screenshot](https://github.com/user-attachments/assets/b990beba-dfa5-4ee1-8f8f-9ba2bd535d87)
