@@ -1,3 +1,6 @@
+> [!IMPORTANT]
+> This project is on hold until gtk-vnc and msys2 fix the bugs mentioned below. I will not invest time in the GTK ecosystem until they are willing to invest time in theirs. 🤷‍♂️
+
 # spiritvnc-gtk
 A GTK 3-based multi-connection VNC client for Unix-like and Windows systems 
 
