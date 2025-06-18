@@ -1,5 +1,5 @@
 > [!IMPORTANT]
-> This project is on hold until gtk-vnc and msys2 fix the bugs mentioned below. I will not invest time in the GTK ecosystem until they are willing to invest time in theirs. 🤷‍♂️
+> This project is on hold until gtk-vnc and msys2 fix the bugs mentioned below. This is why I like the FLTK project -- they actually are responsive to bug reports and don't ghost you! 🤷‍♂️
 
 # spiritvnc-gtk
 A GTK 3-based multi-connection VNC client for Unix-like and Windows systems 
