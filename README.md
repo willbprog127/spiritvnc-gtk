@@ -1,5 +1,5 @@
 > [!IMPORTANT]
-> This project will be put into **read-only archive mode soon** due to unresolved gtk-vnc and msys2 bugs mentioned below. I don't have time to play silly games with dependency devs / maintainers! This is why I like the FLTK project -- they actually are responsive to bug reports and don't ghost you! 🤷‍♂️
+> This project is now in **read-only archive mode** due to unresolved gtk-vnc and msys2 bugs mentioned below. I don't have time to play silly games with dependency devs / maintainers! This is why I like the FLTK project -- they actually are responsive to bug reports and don't ghost you! 🤷‍♂️
 
 # spiritvnc-gtk
 A GTK 3-based multi-connection VNC client for Unix-like and Windows systems 
