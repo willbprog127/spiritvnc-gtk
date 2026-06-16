@@ -1,5 +1,5 @@
 > [!IMPORTANT]
-> This project is __was__ in read-only archive mode until 2026-06-16 due to unresolved gtk-vnc and msys2 bugs mentioned below. gtk-vnc maintainers took an extraordinary amount of time to reply to my bug report, but I can finally start working on this project again!
+> This project __was__ in read-only archive mode until 2026-06-16 due to unresolved gtk-vnc and msys2 bugs mentioned below. gtk-vnc maintainers took an extraordinary amount of time to reply to my bug report, but I can finally start working on this project again!
 
 # spiritvnc-gtk
 A GTK 3-based multi-connection VNC client for Unix-like and Windows systems 
