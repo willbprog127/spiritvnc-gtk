@@ -881,6 +881,8 @@ void svShowAppOptionsWindow ()
   gtk_window_set_title(GTK_WINDOW(opts->optionsWin), "SpiritVNC App Options");
   gtk_window_set_modal(GTK_WINDOW(opts->optionsWin), true);
   gtk_window_set_resizable(GTK_WINDOW(opts->optionsWin), false);
+  gtk_window_set_transient_for(GTK_WINDOW(opts->optionsWin), GTK_WINDOW(app->mainWin));
+  gtk_window_set_position(GTK_WINDOW(opts->optionsWin), GTK_WIN_POS_CENTER_ON_PARENT);
 
   // parent box
   GtkWidget * boxOptsParent = gtk_box_new(GTK_ORIENTATION_VERTICAL, 7);
@@ -1017,6 +1019,8 @@ void svShowConnectionEditWindow (Connection * con)
   settings->settingsWin = gtk_window_new(GTK_WINDOW_TOPLEVEL);
   gtk_window_set_modal(GTK_WINDOW(settings->settingsWin), true);
   gtk_window_set_resizable(GTK_WINDOW(settings->settingsWin), false);
+  gtk_window_set_transient_for(GTK_WINDOW(settings->settingsWin), GTK_WINDOW(app->mainWin));
+  gtk_window_set_position(GTK_WINDOW(settings->settingsWin), GTK_WIN_POS_CENTER_ON_PARENT);
 
   // set window title
   char strTitle[1024] = {0};
@@ -2601,6 +2605,8 @@ void svHandleSendEnteredKeystrokesMenuItem (GtkMenuItem * gMenuItem, gpointer us
   // create output window
   GtkWidget * sendKeysWin = gtk_window_new(GTK_WINDOW_TOPLEVEL);
   gtk_window_set_modal(GTK_WINDOW(sendKeysWin), true);
+  gtk_window_set_transient_for(GTK_WINDOW(sendKeysWin), GTK_WINDOW(app->mainWin));
+  gtk_window_set_position(GTK_WINDOW(sendKeysWin), GTK_WIN_POS_CENTER_ON_PARENT);
 
   // set window title
   gtk_window_set_title(GTK_WINDOW(sendKeysWin), titleStr);
@@ -2708,6 +2714,8 @@ void svHandleCustomCommandMenuItem (GtkMenuItem * gMenuItem, gpointer userData)
       gtk_window_set_title(GTK_WINDOW(outWin), "Custom command output - SpiritVNC");
       gtk_window_set_modal(GTK_WINDOW(outWin), true);
       gtk_window_set_resizable(GTK_WINDOW(outWin), false);
+      gtk_window_set_transient_for(GTK_WINDOW(outWin), GTK_WINDOW(app->mainWin));
+      gtk_window_set_position(GTK_WINDOW(outWin), GTK_WIN_POS_CENTER_ON_PARENT);
 
       // parent box
       GtkWidget * boxParent = gtk_box_new(GTK_ORIENTATION_VERTICAL, 7);
@@ -2724,18 +2732,13 @@ void svHandleCustomCommandMenuItem (GtkMenuItem * gMenuItem, gpointer userData)
       // add grid to parent box
       gtk_box_pack_start(GTK_BOX(boxParent), grid, false, false, 0);
 
-      // out label
-      GtkWidget * lblOut = gtk_label_new("Custom command had output");
-      gtk_widget_set_halign(lblOut, GTK_ALIGN_START);
-      gtk_grid_attach(GTK_GRID(grid), lblOut, 1, 1, 1, 1);
-
       // command entry (read-only, to show command)
-      GtkWidget * entryCmd = gtk_entry_new();
-      gtk_editable_set_editable(GTK_EDITABLE(entryCmd), false);
-      gtk_widget_set_can_focus(entryCmd, false);
-      gtk_entry_set_text(GTK_ENTRY(entryCmd), cmd);
-
-      gtk_grid_attach(GTK_GRID(grid), entryCmd, 1, 2, 1, 1);
+      GtkWidget * lblCmd = gtk_label_new("");
+      gtk_widget_set_halign(lblCmd, GTK_ALIGN_START);
+      GString * cmdString = g_string_new(NULL);
+      g_string_printf(cmdString, "Command: '%s'", cmd);
+      gtk_label_set_text(GTK_LABEL(lblCmd), cmdString->str);
+      gtk_grid_attach(GTK_GRID(grid), lblCmd, 1, 2, 1, 1);
 
       // scroller for textview
       GtkWidget * scroll = gtk_scrolled_window_new(NULL, NULL);
@@ -2759,7 +2762,7 @@ void svHandleCustomCommandMenuItem (GtkMenuItem * gMenuItem, gpointer userData)
       GtkWidget * boxButtons = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 5);
 
       // okay
-      GtkWidget * btnOk = gtk_button_new_with_label("Ok");
+      GtkWidget * btnOk = gtk_button_new_with_label("OK");
       gtk_widget_set_size_request(btnOk, 110, -1);
       g_signal_connect(btnOk, "clicked", G_CALLBACK(svHandleCommandOutputOk), outWin);
 
@@ -2810,6 +2813,19 @@ void svHandleEditMenuItem (GtkMenuItem * gMenuItem, gpointer userData)
     return;
 
   svShowConnectionEditWindow(con);
+}
+
+/* menu item handler - call connection editor */
+void svHandleSyncClipboardMenuItem (GtkMenuItem * gMenuItem, gpointer userData)
+{
+  Connection * con = (Connection *)userData;
+
+  if (con == NULL || con->clipboard == NULL || con->clipboard->len < 1)
+    return;
+
+  // set local keyboard
+  GtkClipboard * cb = gtk_clipboard_get(GDK_SELECTION_CLIPBOARD);
+  gtk_clipboard_set_text(cb, con->clipboard->str, -1);
 }
 
 
@@ -3051,52 +3067,79 @@ void svConnectionRightClick (Connection * con)
   gtk_menu_shell_append(GTK_MENU_SHELL(rightMenu), delete);
   g_signal_connect(delete, "activate", G_CALLBACK(svHandleDeleteMenuItem), con);
 
+  bool enableCustomCommands = false;
+
   // only display custom commands submenu if any subcommands are enabled and have a label
   if ((con->customCmd1Enabled == true && strcmp(con->customCmd1Label->str, "") != 0) ||
     (con->customCmd2Enabled == true && strcmp(con->customCmd2Label->str, "") != 0) ||
     (con->customCmd3Enabled == true && strcmp(con->customCmd3Label->str, "") != 0))
   {
-    // custom commands submenu
-    GtkWidget * cmdSep = gtk_separator_menu_item_new();
-    gtk_menu_shell_append(GTK_MENU_SHELL(rightMenu), cmdSep);
+    enableCustomCommands = true;
+  }
+  // custom commands submenu
+  gtk_menu_shell_append(GTK_MENU_SHELL(rightMenu), gtk_separator_menu_item_new());
 
-    // custom commands
-    GtkWidget * cc = gtk_menu_item_new_with_label("Custom Commands");
-    svSetTooltip(cc, "Custom Commands sub-menu");
-    gtk_menu_item_set_use_underline(GTK_MENU_ITEM(cc), true);
-    gtk_widget_set_sensitive(GTK_WIDGET(cc), true);
-    gtk_menu_shell_append(GTK_MENU_SHELL(rightMenu), cc);
+  // custom commands
+  GtkWidget * cc = gtk_menu_item_new_with_label("Custom commands");
+  svSetTooltip(cc, "Custom commands sub-menu");
+  gtk_menu_item_set_use_underline(GTK_MENU_ITEM(cc), true);
+  gtk_widget_set_sensitive(GTK_WIDGET(cc), enableCustomCommands); //true);
+  gtk_menu_shell_append(GTK_MENU_SHELL(rightMenu), cc);
 
-    // create submenu
-    GtkWidget * customCommands = gtk_menu_new();
+  // create submenu
+  GtkWidget * customCommands = gtk_menu_new();
 
-    // attach submenu to custom commands item
-    gtk_menu_item_set_submenu(GTK_MENU_ITEM(cc), customCommands);
+  // attach submenu to custom commands item
+  gtk_menu_item_set_submenu(GTK_MENU_ITEM(cc), customCommands);
 
+  if (con->customCmd1Enabled && enableCustomCommands)
+  {
     // custom command 1
     GtkWidget * cmdLbl1 = gtk_menu_item_new_with_label(con->customCmd1Label->str);
-    svSetTooltip(cmdLbl1, "Runs Custom Command 1's command");
+    svSetTooltip(cmdLbl1, "Runs custom command 1");
     gtk_menu_item_set_use_underline(GTK_MENU_ITEM(cmdLbl1), true);
     gtk_widget_set_sensitive(GTK_WIDGET(cmdLbl1), con->customCmd1Enabled);
     gtk_menu_shell_append(GTK_MENU_SHELL(customCommands), cmdLbl1);
     g_signal_connect(cmdLbl1, "activate", G_CALLBACK(svHandleCustomCommandMenuItem), con->customCmd1->str);
+  }
 
+  if (con->customCmd2Enabled && enableCustomCommands)
+  {
     // custom command 2
     GtkWidget * cmdLbl2 = gtk_menu_item_new_with_label(con->customCmd2Label->str);
-    svSetTooltip(cmdLbl2, "Runs Custom Command 2's command");
+    svSetTooltip(cmdLbl2, "Runs custom command 2");
     gtk_menu_item_set_use_underline(GTK_MENU_ITEM(cmdLbl2), true);
     gtk_widget_set_sensitive(GTK_WIDGET(cmdLbl2), con->customCmd2Enabled);
     gtk_menu_shell_append(GTK_MENU_SHELL(customCommands), cmdLbl2);
     g_signal_connect(cmdLbl2, "activate", G_CALLBACK(svHandleCustomCommandMenuItem), con->customCmd2->str);
+  }
 
+  if (con->customCmd3Enabled && enableCustomCommands)
+  {
     // custom command 3
     GtkWidget * cmdLbl3 = gtk_menu_item_new_with_label(con->customCmd3Label->str);
-    svSetTooltip(cmdLbl3, "Runs Custom Command 3's command");
+    svSetTooltip(cmdLbl3, "Runs custom command 3");
     gtk_menu_item_set_use_underline(GTK_MENU_ITEM(cmdLbl3), true);
     gtk_widget_set_sensitive(GTK_WIDGET(cmdLbl3), con->customCmd3Enabled);
     gtk_menu_shell_append(GTK_MENU_SHELL(customCommands), cmdLbl3);
     g_signal_connect(cmdLbl3, "activate", G_CALLBACK(svHandleCustomCommandMenuItem), con->customCmd3->str);
   }
+  //}
+
+  // and all the rest, all on gilligan's island
+  gtk_menu_shell_append(GTK_MENU_SHELL(rightMenu), gtk_separator_menu_item_new());
+
+  // edit menu item ##############!#!#!#!#!#!#!#!#!#!#!#!###############################################################
+  GtkWidget * setClipboard = gtk_menu_item_new_with_label("Set my clipboard to this connection's clipboard");
+  svSetTooltip(setClipboard, "Sets this computer's clipboard to the contents of this connection's clipboard");
+  gtk_menu_item_set_use_underline(GTK_MENU_ITEM(setClipboard), true);
+  if (con->clipboard->len > 0)
+    gtk_widget_set_sensitive(GTK_WIDGET(setClipboard), true);
+  else
+    gtk_widget_set_sensitive(GTK_WIDGET(setClipboard), false);
+  gtk_menu_shell_append(GTK_MENU_SHELL(rightMenu), setClipboard);
+  g_signal_connect(setClipboard, "activate", G_CALLBACK(svHandleSyncClipboardMenuItem), con);
+
 
   // show all the thingz
   gtk_widget_show_all(GTK_WIDGET(rightMenu));
@@ -3394,11 +3437,13 @@ void svSavePreviousQuickNoteText (Connection * newConnection)
 
 
 /* handle vnc obj 'server cut / copy (clipboard) text' event */
-void svHandleServerClipboard (VncConnection * conn, const GString * text, void * data)
+void svHandleServerClipboard (VncConnection * conn, const char * text, void * data)
 {
   printf("handle server clipboard\n");
 
-  if (conn == NULL || data == NULL || text == NULL || text->len < 1)
+  size_t nTextLength = strlen(text);
+
+  if (data == NULL || text == NULL || nTextLength < 1)
     return;
 
   Connection * con = (Connection *)data;
@@ -3406,9 +3451,12 @@ void svHandleServerClipboard (VncConnection * conn, const GString * text, void *
   if (con == NULL)
     return;
 
-  printf("server clipboard - len: %li\n", text->len);
+  //printf("server clipboard - len: %li, text: %s\n", nTextLength, text);
 
-  g_string_assign(con->clipboard, text->str);
+  // store this server's clipboard text to this connection's clipboard string
+  g_string_assign(con->clipboard, text);
+
+  // below commented out because we will do this in connection right-click
 }
 
 
@@ -3443,9 +3491,7 @@ void svConnectionCreate (Connection * con)
   g_signal_connect(con->vncObj, "vnc-auth-credential", G_CALLBACK(svServerAuthenticate), NULL);
   g_signal_connect(con->vncObj, "vnc-error", G_CALLBACK(svServerError), con);
   g_signal_connect(con->vncObj, "vnc-error", G_CALLBACK(svServerError), con);
-
-  // don't handle clipboard for now -- possible gtk-vnc bug
-  //g_signal_connect(con->vncObj, "vnc-server-cut-text", G_CALLBACK(svHandleServerClipboard), con);
+  g_signal_connect(con->vncObj, "vnc-server-cut-text", G_CALLBACK(svHandleServerClipboard), con);
 
   // change connection list icon
   svSetIconFromConnectionName(con->name->str, SV_STATE_WAITING);
@@ -3585,6 +3631,9 @@ void svConnectionEnd (Connection * con)
 
   // close the vnc display connection
   vnc_display_close(VNC_DISPLAY(con->vncObj));
+
+  // clear connection clipboard
+  g_string_assign(con->clipboard, "");
 }
 
 
@@ -3676,6 +3725,10 @@ void svConnectionOpen (Connection * con)
 
   // set lossy encoding
   vnc_display_set_lossy_encoding(VNC_DISPLAY(con->vncObj), con->lossyEncoding);
+
+  // set scaling
+  vnc_display_set_scaling(VNC_DISPLAY(con->vncObj), con->scale);
+  vnc_display_set_keep_aspect_ratio(VNC_DISPLAY(con->vncObj), TRUE);
 
   // initiate connection
   switch (con->type)
