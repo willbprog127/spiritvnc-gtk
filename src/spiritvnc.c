@@ -818,6 +818,8 @@ void svHandleConnectionSettingsCancel (GtkButton* self, gpointer userData)
 
   // free the malloc'd settings
   g_free(settings);
+
+  app->addNewConnection = false;
 }
 
 
@@ -2732,7 +2734,7 @@ void svHandleCustomCommandMenuItem (GtkMenuItem * gMenuItem, gpointer userData)
       // add grid to parent box
       gtk_box_pack_start(GTK_BOX(boxParent), grid, false, false, 0);
 
-      // command entry (read-only, to show command)
+      // command label (to show command that was executed)
       GtkWidget * lblCmd = gtk_label_new("");
       gtk_widget_set_halign(lblCmd, GTK_ALIGN_START);
       GString * cmdString = g_string_new(NULL);
@@ -3129,7 +3131,7 @@ void svConnectionRightClick (Connection * con)
   // and all the rest, all on gilligan's island
   gtk_menu_shell_append(GTK_MENU_SHELL(rightMenu), gtk_separator_menu_item_new());
 
-  // edit menu item ##############!#!#!#!#!#!#!#!#!#!#!#!###############################################################
+  // sync clipboard item
   GtkWidget * setClipboard = gtk_menu_item_new_with_label("Set my clipboard to this connection's clipboard");
   svSetTooltip(setClipboard, "Sets this computer's clipboard to the contents of this connection's clipboard");
   gtk_menu_item_set_use_underline(GTK_MENU_ITEM(setClipboard), true);
@@ -3633,7 +3635,7 @@ void svConnectionEnd (Connection * con)
   vnc_display_close(VNC_DISPLAY(con->vncObj));
 
   // clear connection clipboard
-  g_string_assign(con->clipboard, "");
+  g_string_truncate(con->clipboard, 0);
 }
 
 
