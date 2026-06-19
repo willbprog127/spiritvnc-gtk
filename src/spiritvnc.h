@@ -315,6 +315,7 @@ void svToLower (char *);
 void svSavePreviousQuickNoteText (Connection *);
 void svServerError (VncConnection *, const char *, void *);
 void svSetIconFromConnectionName (const char *, unsigned int);
+void svSetTextFromConnectionName (const char *, const char *);
 void svSetToolsMenuItems(bool);
 void svSetTooltip(GtkWidget *, const char *);
 void svSetMenuItemTooltips ();

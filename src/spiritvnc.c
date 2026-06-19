@@ -606,13 +606,17 @@ void svHandleConnectionSettingsSave (GtkButton * self, gpointer userData)
   // connection f12 macro
   g_string_assign(con->f12Macro, gtk_entry_get_text(GTK_ENTRY(settings->f12Macro)));
 
-  // vnc choice radio button
-  if (gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(settings->vncChoice)) == true)
-    con->type = SV_TYPE_VNC;
+  // don't change type for reverse vnc connections
+  if (con->type != SV_TYPE_VNC_REVERSE)
+  {
+    // vnc choice radio button
+    if (gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(settings->vncChoice)) == true)
+      con->type = SV_TYPE_VNC;
 
-  // vnc-over-ssh choice radio button
-  if (gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(settings->svncChoice)) == true)
-    con->type = SV_TYPE_VNC_OVER_SSH;
+    // vnc-over-ssh choice radio button
+    if (gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(settings->svncChoice)) == true)
+      con->type = SV_TYPE_VNC_OVER_SSH;
+  }
 
   // vnc port
   char * vPortVal = (char *)gtk_entry_get_text(GTK_ENTRY(settings->vncPort));
@@ -801,6 +805,34 @@ void svHandleConnectionSettingsSave (GtkButton * self, gpointer userData)
 
   // free the malloc'd settings
   g_free(settings);
+
+  // update stuff if connected
+
+  if (con->state == SV_STATE_CONNECTED)
+  {
+    // set image quality
+    switch (con->quality)
+    {
+      case SV_QUAL_LOW:
+        vnc_display_set_depth(VNC_DISPLAY(con->vncObj), VNC_DISPLAY_DEPTH_COLOR_LOW);
+        break;
+      case SV_QUAL_MEDIUM:
+        vnc_display_set_depth(VNC_DISPLAY(con->vncObj), VNC_DISPLAY_DEPTH_COLOR_MEDIUM);
+        break;
+      case SV_QUAL_FULL:
+        vnc_display_set_depth(VNC_DISPLAY(con->vncObj), VNC_DISPLAY_DEPTH_COLOR_FULL);
+        break;
+      default:
+        vnc_display_set_depth(VNC_DISPLAY(con->vncObj), VNC_DISPLAY_DEPTH_COLOR_DEFAULT);
+    }
+
+    // set lossy encoding
+    vnc_display_set_lossy_encoding(VNC_DISPLAY(con->vncObj), con->lossyEncoding);
+
+    // set scaling
+    vnc_display_set_scaling(VNC_DISPLAY(con->vncObj), con->scale);
+    vnc_display_set_keep_aspect_ratio(VNC_DISPLAY(con->vncObj), TRUE);
+  }
 }
 
 
@@ -1093,6 +1125,11 @@ void svShowConnectionEditWindow (Connection * con)
   gtk_grid_attach(GTK_GRID(vncPage), settings->f12Macro, 2, 4, 3, 1);
 
   // vnc or vnc-over-ssh
+  bool allowConnectionTypeChange = true;
+
+  if (con->type == SV_TYPE_VNC_REVERSE)
+    allowConnectionTypeChange = false;
+
   GtkWidget * boxVNCChoice = gtk_box_new(GTK_ORIENTATION_VERTICAL, 3);
 
   GtkWidget * lblVNCChoice = gtk_label_new("Server type");
@@ -1103,8 +1140,10 @@ void svShowConnectionEditWindow (Connection * con)
   // - vnc choice group
   GSList * vncChoiceGroup = NULL;
   settings->vncChoice = gtk_radio_button_new_with_label(vncChoiceGroup, "VNC");
+  gtk_widget_set_sensitive(settings->vncChoice, allowConnectionTypeChange);
   vncChoiceGroup = gtk_radio_button_get_group(GTK_RADIO_BUTTON(settings->vncChoice));
   settings->svncChoice = gtk_radio_button_new_with_label(vncChoiceGroup, "VNC over SSH");
+  gtk_widget_set_sensitive(settings->svncChoice, allowConnectionTypeChange);
   svSetTooltip(settings->vncChoice, "Sets this to be a VNC connection");
   vncChoiceGroup = gtk_radio_button_get_group(GTK_RADIO_BUTTON(settings->svncChoice));
   svSetTooltip(settings->svncChoice, "Sets this to be a VNC-over-SSH connection");
@@ -1549,7 +1588,7 @@ void svHandleListenModeMenuItem ()
   {
     // change listen mode tools menu item text
     gtk_menu_item_set_label(GTK_MENU_ITEM(app->toolsItems->listenMode), "Disable _listen mode");
-    gtk_window_set_title(GTK_WINDOW(app->mainWin), "SpiritVNC - Listen Mode");
+    gtk_window_set_title(GTK_WINDOW(app->mainWin), "SpiritVNC (Listen Mode)");
 
     // create listening socket
     app->listenSocket = g_socket_new(G_SOCKET_FAMILY_IPV4,
@@ -2452,7 +2491,52 @@ void svSetIconFromConnectionName (const char * text, unsigned int state)
 
         // set the icon
         gtk_image_set_from_pixbuf(GTK_IMAGE(img), pb);
+
       }
+
+      return;
+    }
+  }
+}
+
+
+/* sets a connection's text in the connection list */
+void svSetTextFromConnectionName (const char * currentText, const char * newText)
+{
+  if (currentText == NULL || newText == NULL)
+    return;
+
+  GList * rows = gtk_container_get_children(GTK_CONTAINER(app->serverList));
+
+  // loop through each row
+  for (GList * l = rows; l != NULL; l = l->next)
+  {
+    GtkWidget * row = GTK_WIDGET(l->data);
+
+    // get box that holds status image and label
+    GtkWidget * childBox = gtk_bin_get_child(GTK_BIN(row));
+
+    if (childBox == NULL)
+      continue;
+
+    // get box's children
+    GList * boxChildren = gtk_container_get_children(GTK_CONTAINER(childBox));
+
+    GtkWidget * label = g_list_nth_data(boxChildren, 1);
+
+    // get label's text, if any
+    char * lText = (char *)gtk_label_get_text(GTK_LABEL(label));
+
+    if (lText == NULL)
+      continue;
+
+    // if the label text matches, change to new text
+    if (strcmp(lText, currentText) == 0)
+    {
+      if (label != NULL)
+        gtk_label_set_label(GTK_LABEL(label), newText);
+
+      return;
     }
   }
 }
@@ -3328,11 +3412,18 @@ void svServerDisconnected (GtkWidget * vncObj)
   if (con->type == SV_TYPE_VNC_OVER_SSH)
     con->sshCloseThread = g_thread_new("ssh-closer", svSSHConnectionCloser, con);
 
+  con->vncObj = NULL;
+
   // * set disconnect state and icon *
+
+  bool manualDisconnect = false;
 
   // manual disconnect
   if (con->state == SV_STATE_CONNECTED && con->disconnectType != SV_DISC_VNC_ERROR && con->disconnectType != SV_DISC_SSH_ERROR)
+  {
+    manualDisconnect = true;
     con->state = SV_STATE_DISCONNECTED;
+  }
 
   // timeout disconnect
   else if (con->state == SV_STATE_WAITING && con->state != SV_STATE_TIMEOUT && con->disconnectType != SV_DISC_VNC_ERROR &&
@@ -3346,7 +3437,9 @@ void svServerDisconnected (GtkWidget * vncObj)
   // set icon
   svSetIconFromConnectionName(con->name->str, con->state);
 
-  con->vncObj = NULL;
+  // automatically delete listening connections on manual disconnect
+  if (con->type == SV_TYPE_VNC_REVERSE && manualDisconnect)
+    svHandleDeleteMenuItem(NULL, con);
 }
 
 
@@ -3404,10 +3497,23 @@ void svServerInitialized (GtkWidget * vncObj)
   GDateTime * now = g_date_time_new_now_local();
   g_string_assign(con->lastConnectTime, g_date_time_format(now, "%H:%M:%S--%Y-%m-%d"));
 
-  // set 'last connected' label text
-  char strTime[50] = {0};
-  snprintf(strTime, 49, "Last connected: %s", con->lastConnectTime->str);
-  gtk_label_set_text(GTK_LABEL(app->quickNoteLastConnected), strTime);
+  // change listening display text and name to actual remote name, if available
+  if (con->type == SV_TYPE_VNC_REVERSE)
+  {
+    const char * remoteName = vnc_display_get_name(VNC_DISPLAY(vncObj));
+
+    if (strcmp(remoteName, "") != 0)
+    {
+        // make time string
+        GDateTime * now = g_date_time_new_now_local();
+        const char * nowStr = g_date_time_format(now, "-%Y%m%d%H%M%S");
+        GString * fullRemoteName = g_string_new(remoteName);
+        g_string_append(fullRemoteName, nowStr);
+
+      svSetTextFromConnectionName(con->name->str, fullRemoteName->str);
+      g_string_assign(con->name, fullRemoteName->str);
+    }
+  }
 
   // only show newly-connected server if the listitem is selected
   char selectedRowText[1025] = {0};
@@ -3415,6 +3521,12 @@ void svServerInitialized (GtkWidget * vncObj)
 
   if (strcmp(con->name->str, selectedRowText) == 0)
   {
+    // set 'last connected' label text
+    char strTime[50] = {0};
+    snprintf(strTime, 49, "Last connected: %s", con->lastConnectTime->str);
+    gtk_label_set_text(GTK_LABEL(app->quickNoteLastConnected), strTime);
+
+    // show the remote server screen
     gtk_widget_show(vncObj);
     gtk_stack_set_visible_child(GTK_STACK(app->displayStack), vncObj);
 
@@ -3735,7 +3847,7 @@ void svConnectionEnd (Connection * con)
   if (con->type != SV_TYPE_VNC_REVERSE)
     snprintf(logStr, FILENAME_MAX - 1, "Ending connection '%s - %s'", con->name->str, con->address->str);
   else
-    snprintf(logStr, FILENAME_MAX - 1, "Ending listening connection");
+    snprintf(logStr, FILENAME_MAX - 1, "Ending listening connection '%s'", con->name->str);
 
   svLog(logStr, true);
 
@@ -3753,10 +3865,6 @@ void svConnectionEnd (Connection * con)
 
   // clear connection clipboard
   g_string_truncate(con->clipboard, 0);
-
-  // automatically delete listening connections on manual disconnect
-  if (con->type == SV_TYPE_VNC_REVERSE)
-    svHandleDeleteMenuItem(NULL, con);
 }
 
 
