@@ -108,6 +108,10 @@ typedef struct Application
   //is_resizing = False
   //is_writing_config = False
   //listen_mode = False
+  bool listenMode;
+  unsigned int listenPort;
+  GSocket * listenSocket;
+  GSource * listenSource;
 
   // important paths that probably shouldn't be hard-coded
   GString * appConfigDir;
@@ -174,6 +178,7 @@ typedef struct Connection
   FILE * sshStream;
   GString * clipboard;
   GtkWidget * settingsWin;
+  int listenFd;
 } Connection;
 
 typedef struct
@@ -253,7 +258,8 @@ enum ConnectionState
 enum ConnectionType
 {
   SV_TYPE_VNC = 0,
-  SV_TYPE_VNC_OVER_SSH
+  SV_TYPE_VNC_OVER_SSH,
+  SV_TYPE_VNC_REVERSE
 };
 
 enum ConnectionQuality

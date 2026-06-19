@@ -217,6 +217,8 @@ void svInitAppVars ()
   //# flags, states and stuff
   //is_writing_config = False
   //listen_mode = False
+  app->listenMode = false;
+  app->listenPort = 5500;
 
   // important paths
 
@@ -1493,6 +1495,102 @@ void svCheckForNewConnectionAdd ()
   svShowConnectionEditWindow(con);
 }
 
+/* handle reverse vnc connection */
+gboolean svHandleReverseConnection (gpointer data)
+{
+  GSocket * sock = (GSocket *)data;
+
+  if (sock == NULL)
+    return false;
+
+  GSocket * client = g_socket_accept(sock, NULL, NULL);
+  //int fd = g_socket_get_fd(client);
+
+  //VncConnection * conn = vnc_connection_new();
+  //vnc_connection_open_fd(conn, fd);
+
+  // create new connection object
+  Connection * con = (Connection *)malloc(sizeof(Connection));
+
+  if (con == NULL)
+    return false;
+
+  svInitConnObject(con);
+
+  // make time string
+  GDateTime * now = g_date_time_new_now_local();
+  const char * nowStr = g_date_time_format(now, "Listening-%Y%m%d%H%M%S");
+
+  // set up new connection
+  g_string_assign(con->name, nowStr);
+  g_string_assign(con->group, "Listening");
+  con->type = SV_TYPE_VNC_REVERSE;
+  con->listenFd = g_socket_get_fd(client);
+
+  // append connection to connection list
+  app->connections = g_list_append(app->connections, con);
+
+  // create box, image and label for listbox row
+  svInsertHostListRow(con->name->str, -1);
+
+  svConnectionCreate(con);
+
+  printf("Reverse connection attempt\n");
+  return true;  //TRUE;
+}
+
+
+/* menu item handler - toggle listen mode */
+void svHandleListenModeMenuItem ()
+{
+  app->listenMode = !app->listenMode;
+
+  if (app->listenMode)
+  {
+    // change listen mode tools menu item text
+    gtk_menu_item_set_label(GTK_MENU_ITEM(app->toolsItems->listenMode), "Disable _listen mode");
+    gtk_window_set_title(GTK_WINDOW(app->mainWin), "SpiritVNC - Listen Mode");
+
+    // create listening socket
+    app->listenSocket = g_socket_new(G_SOCKET_FAMILY_IPV4,
+                                 G_SOCKET_TYPE_STREAM,
+                                 G_SOCKET_PROTOCOL_TCP,
+                                 NULL);
+
+    GInetAddress * addr = g_inet_address_new_any(G_SOCKET_FAMILY_IPV4);
+    GSocketAddress * saddr = g_inet_socket_address_new(addr, app->listenPort);
+
+    g_socket_bind(app->listenSocket, saddr, TRUE, NULL);
+    g_socket_listen(app->listenSocket, NULL);
+
+    // start listening
+    app->listenSource = g_socket_create_source(app->listenSocket, G_IO_IN, NULL);
+    g_source_set_callback(app->listenSource, svHandleReverseConnection, app->listenSocket, NULL);
+    g_source_attach(app->listenSource, g_main_context_default());
+
+  }
+  else
+  {
+    // change listen mode tools menu item text
+    gtk_menu_item_set_label(GTK_MENU_ITEM(app->toolsItems->listenMode), "Enable _listen mode");
+    gtk_window_set_title(GTK_WINDOW(app->mainWin), "SpiritVNC");
+
+    if (app->listenSource)
+    {
+      g_source_destroy(app->listenSource);
+      g_source_unref(app->listenSource);
+      app->listenSource = NULL;
+    }
+
+    if (app->listenSocket)
+    {
+      g_socket_close(app->listenSocket, NULL);
+      g_object_unref(app->listenSocket);
+      app->listenSocket = NULL;
+    }
+  }
+}
+
 
 /* create the main app GUI */
 void svCreateGUI (GtkApplication * gtkApp)
@@ -1603,13 +1701,13 @@ void svCreateGUI (GtkApplication * gtkApp)
   g_signal_connect(ful, "activate", G_CALLBACK(svDoQuit), NULL);
 
   // listen mode
-  GtkWidget * lis = gtk_menu_item_new_with_label("Toggle _listen mode");
+  GtkWidget * lis = gtk_menu_item_new_with_label("Enable _listen mode");
   if (app->toolsItems != NULL)
     app->toolsItems->listenMode = lis;
   gtk_menu_item_set_use_underline(GTK_MENU_ITEM(lis), true);
-  gtk_widget_set_sensitive(GTK_WIDGET(lis), false);
+  gtk_widget_set_sensitive(GTK_WIDGET(lis), true);
   gtk_menu_shell_append(GTK_MENU_SHELL(submenu), lis);
-  g_signal_connect(lis, "activate", G_CALLBACK(svDoQuit), NULL);
+  g_signal_connect(lis, "activate", G_CALLBACK(svHandleListenModeMenuItem), NULL);
 
   // screenshot
   GtkWidget * scr = gtk_menu_item_new_with_label("_Screenshot");
@@ -2159,6 +2257,8 @@ void svConfigRead ()
   // free strIn
   g_free(strIn);
 
+  svInsertHostListRow("", -1);
+
   // set or unset hostlist item tooltips
   svSetHostlistItemsTooltips();
 }
@@ -2222,7 +2322,7 @@ void svConfigWrite ()
   {
     con = (Connection *)l->data;
 
-    if (con == NULL || strcmp(con->name->str, "") == 0)
+    if (con == NULL || con->name->len == 0 || con->type == SV_TYPE_VNC_REVERSE)
       continue;
 
     g_string_append_printf(outStr, "host=%s\n", con->name->str);
@@ -2861,15 +2961,23 @@ void svHandleDeleteMenuItem (GtkMenuItem * gMenuItem, gpointer userData)
   if (con == NULL)
     return;
 
-  GtkWidget * dialog = gtk_message_dialog_new(GTK_WINDOW(app->mainWin),
-                                  GTK_DIALOG_DESTROY_WITH_PARENT,
-                                  GTK_MESSAGE_QUESTION,
-                                  GTK_BUTTONS_YES_NO,
-                                  "Are you sure you want to delete '%s'?",
-                                  con->name->str);
-  int res = gtk_dialog_run(GTK_DIALOG(dialog));
+  int res = -1;
 
-  if (res == GTK_RESPONSE_YES)
+  if (con->type != SV_TYPE_VNC_REVERSE)
+  {
+    GtkWidget * dialog = gtk_message_dialog_new(GTK_WINDOW(app->mainWin),
+                                    GTK_DIALOG_DESTROY_WITH_PARENT,
+                                    GTK_MESSAGE_QUESTION,
+                                    GTK_BUTTONS_YES_NO,
+                                    "Are you sure you want to delete '%s'?",
+                                    con->name->str);
+    res = gtk_dialog_run(GTK_DIALOG(dialog));
+
+    // destroy the dialog box
+    gtk_widget_destroy(dialog);
+  }
+
+  if (res == GTK_RESPONSE_YES || con->type == SV_TYPE_VNC_REVERSE)
   {
     Connection * conTemp = NULL;
 
@@ -2927,9 +3035,6 @@ void svHandleDeleteMenuItem (GtkMenuItem * gMenuItem, gpointer userData)
     // Free the list
     g_list_free(rows);
   }
-
-  // destroy the dialog box
-  gtk_widget_destroy(dialog);
 }
 
 
@@ -3469,9 +3574,15 @@ void svConnectionCreate (Connection * con)
   if (con == NULL || con->state == SV_STATE_CONNECTED || con->state == SV_STATE_WAITING)
     return;
 
-  // log
   char logStr[FILENAME_MAX] = {0};
-  snprintf(logStr, FILENAME_MAX - 1, "Starting new connection for '%s - %s'", con->name->str, con->address->str);
+
+  // log
+  if (con->type != SV_TYPE_VNC_REVERSE)
+    snprintf(logStr, FILENAME_MAX - 1, "Creating new connection for '%s - %s'", con->name->str, con->address->str);
+  else
+    snprintf(logStr, FILENAME_MAX - 1, "Creating new listening connection");
+
+  // log
   svLog(logStr, true);
 
   // create a new vnc obj
@@ -3507,6 +3618,7 @@ void svConnectionCreate (Connection * con)
   switch (con->type)
   {
     case SV_TYPE_VNC:
+    case SV_TYPE_VNC_REVERSE:
     // just open the connection straight away
     svConnectionOpen(con);
     break;
@@ -3619,7 +3731,12 @@ void svConnectionEnd (Connection * con)
 
   // log
   char logStr[FILENAME_MAX] = {0};
-  snprintf(logStr, FILENAME_MAX - 1, "Ending connection '%s - %s'", con->name->str, con->address->str);
+
+  if (con->type != SV_TYPE_VNC_REVERSE)
+    snprintf(logStr, FILENAME_MAX - 1, "Ending connection '%s - %s'", con->name->str, con->address->str);
+  else
+    snprintf(logStr, FILENAME_MAX - 1, "Ending listening connection");
+
   svLog(logStr, true);
 
   // hide the vnc display widget
@@ -3636,6 +3753,10 @@ void svConnectionEnd (Connection * con)
 
   // clear connection clipboard
   g_string_truncate(con->clipboard, 0);
+
+  // automatically delete listening connections on manual disconnect
+  if (con->type == SV_TYPE_VNC_REVERSE)
+    svHandleDeleteMenuItem(NULL, con);
 }
 
 
@@ -3738,6 +3859,11 @@ void svConnectionOpen (Connection * con)
     case SV_TYPE_VNC:
       // connect vnc obj directly to remote host
       vnc_display_open_host(VNC_DISPLAY(con->vncObj), con->address->str, con->vncPort->str);
+      break;
+
+    case SV_TYPE_VNC_REVERSE:
+      // connect vnc obj directly to remote host
+      vnc_display_open_fd(VNC_DISPLAY(con->vncObj), con->listenFd);
       break;
 
     case SV_TYPE_VNC_OVER_SSH:
