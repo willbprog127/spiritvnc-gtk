@@ -55,7 +55,7 @@
 
 #include <stdbool.h>
 
-#include "xpms.h"
+#define SV_LONG_STRING_SIZE 1024
 
 // forward declarations
 typedef struct Connection Connection;
@@ -85,20 +85,19 @@ typedef struct Application
   GtkTextBuffer * quickNoteBuffer;
 
   // objects
-  GList * connections;
   ToolsMenuItems * toolsItems;
   Connection * selectedConnection;
   GString * f12Storage;
 
   // app properties
   int serverListWidth;
-  bool showTooltips;
-  bool logToFile;
-  bool maximized;
-  bool debugMode;
+  gboolean showTooltips;
+  gboolean logToFile;
+  gboolean maximized;
+  gboolean debugMode;
   unsigned int vncConnectWaitTime;
   unsigned int scanTimeout;
-  bool addNewConnection;
+  gboolean addNewConnection;
 
   //# flags, states and stuff
   //mouse_click_type = None
@@ -108,7 +107,7 @@ typedef struct Application
   //is_resizing = False
   //is_writing_config = False
   //listen_mode = False
-  bool listenMode;
+  gboolean listenMode;
   unsigned int listenPort;
   GSocket * listenSocket;
   GSource * listenSource;
@@ -142,10 +141,10 @@ typedef struct Connection
   GString * vncPass;
   GString * vncLoginUser;
   GString * vncLoginPass;
-  //bool vncError;
-  bool scale;
-  bool lossyEncoding;
-  bool showRemoteCursor;
+  //gboolean vncError;
+  gboolean scale;
+  gboolean lossyEncoding;
+  gboolean showRemoteCursor;
   unsigned int quality;
   GString * sshUser;
   GString * sshPass;
@@ -154,13 +153,13 @@ typedef struct Connection
   GString * sshPrivKeyfile;
   GString * f12Macro;
   GString * quickNote;
-  bool customCmd1Enabled;
+  gboolean customCmd1Enabled;
   GString * customCmd1Label;
   GString * customCmd1;
-  bool customCmd2Enabled;
+  gboolean customCmd2Enabled;
   GString * customCmd2Label;
   GString * customCmd2;
-  bool customCmd3Enabled;
+  gboolean customCmd3Enabled;
   GString * customCmd3Label;
   GString * customCmd3;
   // 'private' vars
@@ -174,7 +173,9 @@ typedef struct Connection
   GThread * sshThread;
   GThread * sshMonitorThread;
   GThread * sshCloseThread;
-  bool sshReady;
+  gboolean sshContinue;
+  GPid sshPid;
+  int sshStdIn;
   FILE * sshStream;
   GString * clipboard;
   GtkWidget * settingsWin;
@@ -285,8 +286,8 @@ void svDoQuit ();
 void svCreateGUI (GtkApplication *);
 void svConfigRead ();
 void svConfigWrite ();
-bool svConfigCreateNew (bool);
-//Connection * svGetSelectedConnection ();
+gboolean svConfigCreateNew (gboolean);
+Connection * svGetSelectedConnection ();
 void svConnectionEnd (Connection *);
 void svConnectionRightClick (Connection *);
 void svConnectionCreate (Connection *);
@@ -294,7 +295,7 @@ Connection * svConnectionFromName (const char *);
 void svConnectionSwitch (Connection *);
 gpointer svCreateSSHConnection (gpointer);
 gpointer svSSHMonitor (gpointer);
-int svGetSelectedConnectionListItemIndex ();
+void svFreeConnObject(Connection *);
 Connection * svGetSelectedConnectionListConnection ();
 void svHandleAddNewConnectionMenuItem ();
 gboolean svHandleConnectionListClicks (GtkWidget *, GdkEvent *, void *);
@@ -308,20 +309,20 @@ void svHandleSendEnteredKeystrokesSend (GtkButton *, gpointer);
 void svHandleScreenshotMenuItem ();
 void svInitAppVars ();
 void svInitConnObject (Connection *);
-void svInsertHostListRow (char *, int);
-void svLog (char *, bool);
+void svInsertHostListRow (const char *, int, Connection *);
+void svLog (const char *, gboolean);
 void svConnectionOpen (Connection *);
 void svToLower (char *);
-void svSavePreviousQuickNoteText (Connection *);
+void svSavePreviousQuickNoteText (const Connection *);
 void svServerError (VncConnection *, const char *, void *);
 void svSetIconFromConnectionName (const char *, unsigned int);
 void svSetTextFromConnectionName (const char *, const char *);
-void svSetToolsMenuItems(bool);
+void svSetToolsMenuItems(gboolean);
 void svSetTooltip(GtkWidget *, const char *);
 void svSetMenuItemTooltips ();
 void svShowAppOptionsWindow ();
 gpointer svSSHConnectionCloser (gpointer);
 void svStartConnection (Connection *);
-bool svStringToBool (char *);
+gboolean svStringToBool (const char *);
 
 #endif

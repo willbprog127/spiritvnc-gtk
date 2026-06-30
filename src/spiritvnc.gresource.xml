@@ -1,0 +1,12 @@
+<gresources>
+  <gresource prefix="/com/spiritvnc">
+    <file>pngs/spiritvnc.png</file>
+    <file>pngs/blank.png</file>
+    <file>pngs/connected.png</file>
+    <file>pngs/connecting.png</file>
+    <file>pngs/disconnected_big_error.png</file>
+    <file>pngs/disconnected_error.png</file>
+    <file>pngs/disconnected.png</file>
+    <file>pngs/noconnect.png</file>
+  </gresource>
+</gresources>

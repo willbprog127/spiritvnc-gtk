@@ -1,5 +1,5 @@
 /*
- * spiritvnc.c - 2022-2025 Will Brokenbourgh
+ * spiritvnc.c - 2022-2026 Will Brokenbourgh
  * part of the SpiritVNC - Gtk project
  *
 */
@@ -34,27 +34,24 @@
 
 #include "spiritvnc.h"
 
-
 /* debug log since Windows doesn't print to console */
-void svLog (char * strIn, bool skipStdOut)
+void svLog (const char * strIn, gboolean skipStdOut)
 {
   // make time string
   GDateTime * now = g_date_time_new_now_local();
-  char * nowStr = g_date_time_format(now, "%Y-%m-%d-%H:%M:%S");
+  char * nowStr = g_date_time_format(now, "%Y-%m-%d-%H:%M:%S");  //  <<<--- do NOT make const char *
 
   // print to stdout if we aren't skipping or app->debugMode is true
-  if (skipStdOut == false || app->debugMode == true)
-  {
+  if (!skipStdOut || app->debugMode)
     // print to stdout
     printf("SpiritVNC-GTK: %s - %s\n", nowStr, strIn);
-  }
 
   // only log to file if set in options
-  if (app->logToFile == true)
+  if (app->logToFile)
   {
-    FILE * f = fopen(app->appLogFile->str, "a");
+    FILE * f = fopen(app->appLogFile->str, "a");  // opened in 'append' mode
 
-    if (f == NULL)
+    if (!f)
       return;
 
     // print to file
@@ -63,126 +60,94 @@ void svLog (char * strIn, bool skipStdOut)
     fflush(f);
     fclose(f);
   }
+
+  g_free(nowStr);
+  g_date_time_unref(now);
 }
 
 
-/* convert char * to lower-case - in place */
-void svToLower (char * strIn)
+/* convert string to gboolean */
+gboolean svStringToBool (const char * strIn)
 {
-  if (strIn == NULL)
-    return;
+  if (!strIn)
+    return FALSE;
 
-  int intLen = strlen(strIn);
-  char strLow[intLen + 1];
+  char * strLow = g_utf8_strdown(strIn, -1);  //  <<<--- do NOT make const char *
 
-  for (int i = 0; i < intLen; i ++)
-    strLow[i] = tolower(strIn[i]);
+  gboolean result =
+       strcmp(strLow, "1")    == 0 ||
+       strcmp(strLow, "true") == 0 ||
+       strcmp(strLow, "t")    == 0 ||
+       strcmp(strLow, "yes")  == 0 ||
+       strcmp(strLow, "y")    == 0;
 
-  strIn[0] = '\0';
+  g_free(strLow);
 
-  strncpy(strIn, strLow, intLen);
-}
-
-
-/* convert string to bool */
-bool svStringToBool (char * strIn)
-{
-  if (strIn == NULL)
-    return false;
-
-  int intLen = strlen(strIn);
-
-  char strLow[intLen + 1];
-  strncpy(strLow, strIn, sizeof(strLow));
-
-  svToLower(strLow);
-
-  if (strcmp(strLow, "1") == 0)
-    return true;
-  else if (strcmp(strLow, "true") == 0)
-    return true;
-  else if (strcmp(strLow, "t") == 0)
-    return true;
-  else if (strcmp(strLow, "yes") == 0)
-    return true;
-  else if (strcmp(strLow, "y") == 0)
-    return true;
-
-  return false;
+  return result;
 }
 
 
 /* return connection that matches the passed vncObj */
-Connection * svConnectionFromVNCObj (GtkWidget * vncObj)
+Connection * svConnectionFromVNCObj (const GtkWidget * vncObj)
 {
-  Connection * con = NULL;
+  // go through connection listbox and return correct connection
+  GList * rows = gtk_container_get_children(GTK_CONTAINER(app->serverList));
 
-  // go through connection glist and return correct connection
-  for (GList * l = app->connections; l != NULL; l = l->next)
+  for (GList * l = rows; l; l = l->next)
   {
-    con = (Connection *)l->data;
+    GtkListBoxRow * row = l->data;
+    GtkWidget * box = gtk_bin_get_child(GTK_BIN(row));
 
-    if (con != NULL && con->vncObj == vncObj)
+    Connection * con = g_object_get_data(G_OBJECT(box), "con");
+    if (con && con->vncObj == vncObj)
       return con;
   }
+
+  g_list_free(rows);
 
   return NULL;
 }
 
 
-/* return a zero (0) or one (1) from a bool */
+/* return a zero (0) or one (1) from a gboolean */
 /* (justification: some systems don't always return a '1' for true and '0' for false) */
-unsigned int svIntFromBool (bool boolIn)
+unsigned int svIntFromBool (gboolean boolIn)
 {
-  if (boolIn == true)
+  if (boolIn)
     return 1;
   else
     return 0;
 }
 
 
-/* sets the passed variable with whatever text is selected in the connection list */
-void svSelectedRowText (char * selectedRowText)
+/* returns whatever text is selected in the connection list */
+const char * svSelectedRowText ()
 {
   GtkListBoxRow * selectedRow = gtk_list_box_get_selected_row(GTK_LIST_BOX(app->serverList));
+  if (!selectedRow)
+    return NULL;
 
-  if (selectedRow == NULL)
-    return;
-
-  // get box that holds status image and label
   GtkWidget * childBox = gtk_bin_get_child(GTK_BIN(selectedRow));
+  if (!childBox)
+    return NULL;
 
-  if (childBox == NULL)
-    return;
-
-  // get box's children
   GList * boxChildren = gtk_container_get_children(GTK_CONTAINER(childBox));
 
   GtkWidget * label = g_list_nth_data(boxChildren, 1);
 
-  if (label == NULL)
-    return;
+  g_list_free(boxChildren);
 
-  // get label's text, if any
-  const char * rText = gtk_label_get_text(GTK_LABEL(label)); //child));
+  if (!label)
+    return NULL;
 
-  unsigned int textLen = strlen(rText);
-
-  if (textLen < 1)
-    return;
-
-  char rowText[textLen + 1];
-  memset(rowText, '\0', textLen + 1);
-  strcpy(rowText, rText);
-
-  strncpy(selectedRowText, rowText, textLen);
+  return gtk_label_get_text(GTK_LABEL(label));
 }
 
 
 /* initialize app variables */
 void svInitAppVars ()
 {
-  if (app == NULL)
+  if (!app)
   {
     printf("SpiritVNC-GTK: CRITICAL - app variable is NULL -- terminating app");
     exit(-1);
@@ -192,10 +157,16 @@ void svInitAppVars ()
   app->mainWin = NULL;
   app->parent = NULL;
   app->serverList = NULL;
-  app->toolsItems = (ToolsMenuItems *)malloc(sizeof(ToolsMenuItems));
+  app->toolsItems = g_new0(ToolsMenuItems, 1);
+
+  // die if we can't create toolsItems
+  if (!app->toolsItems)
+  {
+    printf("SpiritVNC-GTK - CRITICAL: toolsItems is NULL after creation -- terminating app");
+    exit(-1);
+  }
 
   // important objects
-  app->connections = NULL;
   app->selectedConnection = NULL;
   app->f12Storage = g_string_new(NULL);
 
@@ -215,8 +186,6 @@ void svInitAppVars ()
   app->sshShowWaitTime = 3;
 
   //# flags, states and stuff
-  //is_writing_config = False
-  //listen_mode = False
   app->listenMode = false;
   app->listenPort = 5500;
 
@@ -233,18 +202,13 @@ void svInitAppVars ()
   // app log file
   app->appLogFile = g_string_new(app->appConfigDir->str);
   g_string_append(app->appLogFile, "/spiritvnc-gtk.log");
-
-  //# clipboard goodies
-  //clip = Gtk.Clipboard()
-  //server_clip = False
-  //client_clip = False
 }
 
 
 /* initialize a connection object */
 void svInitConnObject (Connection * con)
 {
-  if (con == NULL)
+  if (!con)
   {
     printf("con is null in svInitConnObject\n");
     return;
@@ -284,8 +248,9 @@ void svInitConnObject (Connection * con)
   con->lastConnectTime = g_string_new(NULL);
   con->sshThread = NULL;
   con->sshMonitorThread = NULL;
-  con->sshReady = false;
+  con->sshContinue = false;
   con->sshStream = NULL;
+  con->sshStdIn = -1;
   con->clipboard = g_string_new(NULL);
 }
 
@@ -295,70 +260,51 @@ void svSetHostlistItemsTooltips ()
 {
   GList * rows = gtk_container_get_children(GTK_CONTAINER(app->serverList));
 
-  // loop through each row
-  for (GList * l = rows; l != NULL; l = l->next)
+  for (GList * l = rows; l; l = l->next)
   {
-    GtkWidget * row = GTK_WIDGET(l->data);
+    GtkListBoxRow * row = GTK_LIST_BOX_ROW(l->data);
 
-    // get box that holds status image and label
-    GtkWidget * childBox = gtk_bin_get_child(GTK_BIN(row));
-
-    if (childBox == NULL)
+    // get the rowBox
+    GtkWidget * rowBox = gtk_bin_get_child(GTK_BIN(row));
+    if (!rowBox)
       continue;
 
-    // get box's children
-    GList * boxChildren = gtk_container_get_children(GTK_CONTAINER(childBox));
+    // get the connection pointer from the box
+    Connection * con = g_object_get_data(G_OBJECT(rowBox), "con");
+    if (!con)
+      continue;
 
-    GtkWidget * label = g_list_nth_data(boxChildren, 1);
-
-    if (label != NULL && GTK_IS_LABEL(label))
+    if (app->showTooltips)
     {
-      const char * text = gtk_label_get_text(GTK_LABEL(label));
+      GString * tipStr = g_string_new(NULL);
+      char typeStr[25] = {0};
 
-      // process if not null and not empty
-      if (text != NULL && strcmp(text, "") != 0)
-      {
-        Connection * con = svConnectionFromName(text);
+      if (con->type == SV_TYPE_VNC)
+        strcpy(typeStr, "VNC");
+      else if (con->type == SV_TYPE_VNC_OVER_SSH)
+        strcpy(typeStr, "VNC over SSH");
 
-        if (con != NULL)
-        {
-          // tooltips are enabled, process
-          if (app->showTooltips == true)
-          {
-            char tipStr[FILENAME_MAX] = {0};
-            char typeStr[25] = {0};
+      g_string_printf(tipStr, "<b>%s</b>\nType: %s\nAddress: %s\nLast connected: %s",
+        con->name->str, typeStr, con->address->str, con->lastConnectTime->str);
 
-            // set connection type
-            if (con->type == SV_TYPE_VNC)
-              strcpy(typeStr, "VNC");
-            else if (con->type == SV_TYPE_VNC_OVER_SSH)
-              strcpy(typeStr, "VNC over SSH");
-
-            // compose tooltip markup
-            snprintf(tipStr, FILENAME_MAX - 1, "<b>%s</b>\nType: %s\nAddress: %s\nLast connected: %s",
-              con->name->str, typeStr, con->address->str, con->lastConnectTime->str);
-
-            // set tooltip markup
-            gtk_widget_set_tooltip_markup(childBox, tipStr);
-          }
-          else
-            // unset tooltip
-            gtk_widget_set_tooltip_text(childBox, NULL);
-        }
-      }
+      gtk_widget_set_tooltip_markup(rowBox, tipStr->str);
     }
-  }
+    else
+      gtk_widget_set_tooltip_text(rowBox, NULL);
+    }
+
+  g_list_free(rows);
 }
 
 
 /* sets a widget or menu-item's tooltip */
 void svSetTooltip(GtkWidget * widget, const char * text)
 {
-  if (widget == NULL || text == NULL)
+  if (!widget || !text)
     return;
 
   // set or unset tooltip, based on app options
-  if (app->showTooltips == true)
+  if (app->showTooltips)
     gtk_widget_set_tooltip_text(widget, text);
   else
     gtk_widget_set_tooltip_text(widget, NULL);
@@ -370,7 +316,7 @@ void svHandleSendEnteredKeystrokesCancel (GtkButton * self, gpointer userData)
 {
   SendKeysObj * obj = (SendKeysObj *)userData;
 
-  if (obj == NULL)
+  if (!obj)
     return;
 
   // destroy send keystrokes window
@@ -384,46 +330,36 @@ void svHandleSendEnteredKeystrokesCancel (GtkButton * self, gpointer userData)
 void svHandleSendEnteredKeystrokesSend (GtkButton * self, gpointer userData)
 {
   SendKeysObj * obj = (SendKeysObj *)userData;
-
-  if (obj == NULL)
+  if (!obj || !obj->win || !obj->textView || !obj->con || !obj->con->vncObj)
     return;
 
-  // return if any of these are null
-  if (obj->win == NULL || obj->textView == NULL || obj->con == NULL || obj->con->vncObj == NULL)
-    return;
-
-  // get textview buffer
   GtkTextBuffer * tb = gtk_text_view_get_buffer(GTK_TEXT_VIEW(obj->textView));
 
-  // beginning and end iters
-  GtkTextIter start;
-  GtkTextIter end;
-
-  // set iters
+  GtkTextIter start, end;
   gtk_text_buffer_get_start_iter(tb, &start);
   gtk_text_buffer_get_end_iter(tb, &end);
 
-  // copy text to char array
-  char sendText[FILENAME_MAX] = {0};
-  strncpy(sendText, gtk_text_buffer_get_text(tb, &start, &end, FALSE), FILENAME_MAX - 1);
-
-  // don't send an empty string
-  if (strcmp(sendText, "") == 0)
+  char * text = gtk_text_buffer_get_text(tb, &start, &end, false);  //  <<<--- do NOT make const char *
+  if (!text || text[0] == '\0')
+  {
+    g_free(text);
     return;
+  }
 
-  unsigned int keys[strlen(sendText) + 1];
-  memset(keys, '\0', sizeof(keys));
+  size_t len = strlen(text);
 
-  // convert text to uint array
-  for (size_t i = 0; i < strlen(sendText); i++)
-    keys[i] = gdk_unicode_to_keyval(sendText[i]);
+  // allocate keys dynamically
+  unsigned int * keys = g_new(unsigned int, len);
 
-  // send the keys to server
-  vnc_display_send_keys(VNC_DISPLAY(obj->con->vncObj), keys, sizeof(keys)/sizeof(keys[0]));
+  for (size_t i = 0; i < len; i++)
+    keys[i] = gdk_unicode_to_keyval(text[i]);
 
-  // destroy the send keystroke window
+  vnc_display_send_keys(VNC_DISPLAY(obj->con->vncObj), keys, len);
+
+  g_free(keys);
+  g_free(text);
+
   gtk_widget_destroy(obj->win);
-
   g_free(obj);
 }
 
@@ -433,7 +369,7 @@ void svHandleCommandOutputOk (GtkButton * self, gpointer userData)
 {
   GtkWidget * outWin = (GtkWidget *)userData;
 
-  if (outWin == NULL)
+  if (!outWin)
     return;
 
   // destroy the command output window
@@ -446,12 +382,11 @@ void svHandleAppOptionsCancel (GtkButton * self, gpointer userData)
 {
   AppOptions * opts = (AppOptions *)userData;
 
-  if (opts == NULL)
+  if (!opts)
     return;
 
   GtkWidget * optsWin = (GtkWidget *)opts->optionsWin;
-
-  if (optsWin == NULL)
+  if (!optsWin)
     return;
 
   // log
@@ -468,13 +403,11 @@ void svHandleAppOptionsCancel (GtkButton * self, gpointer userData)
 void svHandleAppOptionsSave (GtkButton * self, gpointer userData)
 {
   AppOptions * opts = (AppOptions *)userData;
-
-  if (opts == NULL)
+  if (!opts)
     return;
 
   GtkWidget * optsWin = (GtkWidget *)opts->optionsWin;
-
-  if (optsWin == NULL)
+  if (!optsWin)
     return;
 
   // log
@@ -520,75 +453,113 @@ void svHandleAppOptionsSave (GtkButton * self, gpointer userData)
 void svHandleConnectionSettingsSave (GtkButton * self, gpointer userData)
 {
   ConnectionSettings * settings = (ConnectionSettings *)userData;
-
-  if (settings == NULL || settings->settingsWin == NULL)
+  if (!settings || !settings->settingsWin)
     return;
 
   // set con object
   Connection * con = settings->con;
-
-  if (con == NULL)
+  if (!con)
     return;
 
   // log
-  char logStr[FILENAME_MAX] = {0};
-  snprintf(logStr, FILENAME_MAX - 1, "Saving settings for '%s - %s'", con->name->str, con->address->str);
-  svLog(logStr, true);
+  GString * logStr = g_string_new(NULL);
+  g_string_printf(logStr, "Saving settings for '%s - %s'", con->name->str, con->address->str);
+  svLog(logStr->str, true);
+  g_string_free(logStr, true);
 
   // connection name
-  char oldVal[FILENAME_MAX] = {0};
+  //GString * oldVal = g_string_new(con->name->str);
+  //GString * nameVal = g_string_new(gtk_entry_get_text(GTK_ENTRY(settings->connectionName)));
+  const char * oldVal = (const char *)con->name->str;
+  const char * nameVal = (const char *)gtk_entry_get_text(GTK_ENTRY(settings->connectionName));
+  const char * addressVal = (const char *)gtk_entry_get_text(GTK_ENTRY(settings->remoteAddress));
 
-  strncpy(oldVal, con->name->str, FILENAME_MAX - 1);
+  // ** validate stuff first **
 
-  char * nameVal = (char *)gtk_entry_get_text(GTK_ENTRY(settings->connectionName));
+  // if no connection name, warn user
+  if (strcmp(nameVal, "") == 0)
+  {
+    GtkWidget * dialog = gtk_message_dialog_new_with_markup(GTK_WINDOW(settings->settingsWin),
+                                    GTK_DIALOG_DESTROY_WITH_PARENT,
+                                    GTK_MESSAGE_ERROR,
+                                    GTK_BUTTONS_CLOSE,
+                                    "<b>'Connection name' cannot be empty</b>\n\nPlease enter a "
+                                      "connection name then try saving again");
+    gtk_dialog_run(GTK_DIALOG(dialog));
+    gtk_widget_destroy(dialog);
 
-  // set new value
-  //if (strcmp(nameVal, "") != 0)
+    // focus remote address
+    gtk_widget_grab_focus(settings->connectionName);
+
+    return;
+  }
+
+  // if no host address, warn user
+  if (strcmp(addressVal, "") == 0)
+  {
+    GtkWidget * dialog = gtk_message_dialog_new_with_markup(GTK_WINDOW(settings->settingsWin),
+                                    GTK_DIALOG_DESTROY_WITH_PARENT,
+                                    GTK_MESSAGE_ERROR,
+                                    GTK_BUTTONS_CLOSE,
+                                    "<b>'Remote Address' cannot be empty</b>\n\nPlease enter a "
+                                      "valid remote address then try saving again");
+    gtk_dialog_run(GTK_DIALOG(dialog));
+    gtk_widget_destroy(dialog);
+
+    // focus remote address
+    gtk_widget_grab_focus(settings->remoteAddress);
+
+    return;
+  }
+
+  // set new name
   g_string_assign(con->name, nameVal);
 
-  // update existing list item, if name isn't empty and has changed
-  if (strcmp(nameVal, "") != 0)
+  // update existing list item
+  // if value changed, find server list row with old name and update
+  if (strcmp(oldVal, nameVal) != 0)
   {
-    // if value changed, find server list row with old name and update
-    if (strcmp(oldVal, nameVal) != 0)
+    GList * rows = gtk_container_get_children(GTK_CONTAINER(app->serverList));
+
+    // loop through each row
+    for (GList * l = rows; l != NULL; l = l->next)
     {
-      GList * rows = gtk_container_get_children(GTK_CONTAINER(app->serverList));
+      GtkWidget * row = GTK_WIDGET(l->data);
 
-      // loop through each row
-      for (GList * l = rows; l != NULL; l = l->next)
+      // get box that holds status image and label
+      GtkWidget * rowBox = gtk_bin_get_child(GTK_BIN(row));
+
+      if (!rowBox)
+        continue;
+
+      // get box's children
+      GList * boxChildren = gtk_container_get_children(GTK_CONTAINER(rowBox));
+
+      GtkWidget * label = (GtkWidget *)g_list_nth_data(boxChildren, 1);
+
+      g_list_free(boxChildren);
+
+      // get label's text
+      if (label && GTK_IS_LABEL(label))
       {
-        GtkWidget * row = GTK_WIDGET(l->data);
+        const char * text = gtk_label_get_text(GTK_LABEL(label));
 
-        // get box that holds status image and label
-        GtkWidget * childBox = gtk_bin_get_child(GTK_BIN(row));
-
-        if (childBox == NULL)
-          continue;
-
-        // get box's children
-        GList * boxChildren = gtk_container_get_children(GTK_CONTAINER(childBox));
-
-        GtkWidget * label = g_list_nth_data(boxChildren, 1);
-
-        if (label != NULL && GTK_IS_LABEL(label))
+        // if label's text matches this edited connection's old
+        // name, update it
+        if (strcmp(text, oldVal) == 0)
         {
-          const char * text = gtk_label_get_text(GTK_LABEL(label));
-
-          if (strcmp(text, oldVal) == 0)
-          {
-            gtk_label_set_text(GTK_LABEL(label), nameVal);
-            break;
-          }
+          gtk_label_set_text(GTK_LABEL(label), nameVal);
+          break;
         }
       }
-
-      // Free the list
-      g_list_free(rows);
     }
+
+    // Free the list
+    g_list_free(rows);
   }
 
   // connection group
-  char * groupVal = (char *)gtk_entry_get_text(GTK_ENTRY(settings->connectionGroup));
+  const char * groupVal = (char *)gtk_entry_get_text(GTK_ENTRY(settings->connectionGroup));
 
   // set new value
   if (strcmp(groupVal, "") != 0)
@@ -597,11 +568,8 @@ void svHandleConnectionSettingsSave (GtkButton * self, gpointer userData)
     g_string_assign(con->group, "General");
 
   // connection address
-  char * addrVal = (char *)gtk_entry_get_text(GTK_ENTRY(settings->remoteAddress));
-
   // set new value
-  //if (strcmp(addrVal, "") != 0)
-  g_string_assign(con->address, addrVal);
+  g_string_assign(con->address, addressVal);
 
   // connection f12 macro
   g_string_assign(con->f12Macro, gtk_entry_get_text(GTK_ENTRY(settings->f12Macro)));
@@ -610,16 +578,16 @@ void svHandleConnectionSettingsSave (GtkButton * self, gpointer userData)
   if (con->type != SV_TYPE_VNC_REVERSE)
   {
     // vnc choice radio button
-    if (gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(settings->vncChoice)) == true)
+    if (gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(settings->vncChoice)))
       con->type = SV_TYPE_VNC;
 
     // vnc-over-ssh choice radio button
-    if (gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(settings->svncChoice)) == true)
+    if (gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(settings->svncChoice)))
       con->type = SV_TYPE_VNC_OVER_SSH;
   }
 
   // vnc port
-  char * vPortVal = (char *)gtk_entry_get_text(GTK_ENTRY(settings->vncPort));
+  const char * vPortVal = (char *)gtk_entry_get_text(GTK_ENTRY(settings->vncPort));
 
   // set new value
   //if (strcmp(vPortVal, "") != 0)
@@ -628,7 +596,9 @@ void svHandleConnectionSettingsSave (GtkButton * self, gpointer userData)
   // vnc password
   const char * vPassVal = gtk_entry_get_text(GTK_ENTRY(settings->vncPassword));
 
-  g_string_assign(con->vncPass, g_base64_encode((const unsigned char *)vPassVal, strlen(vPassVal)));
+  char * vPassDecoded = g_base64_encode((const unsigned char *)vPassVal, strlen(vPassVal));
+  g_string_assign(con->vncPass, vPassDecoded);
+  g_free(vPassDecoded);
 
   // vnc 'login' username
   g_string_assign(con->vncLoginUser, gtk_entry_get_text(GTK_ENTRY(settings->vncLoginUsername)));
@@ -636,7 +606,9 @@ void svHandleConnectionSettingsSave (GtkButton * self, gpointer userData)
   // vnc 'login' password
   const char * vLoginPassVal = gtk_entry_get_text(GTK_ENTRY(settings->vncLoginPassword));
 
-  g_string_assign(con->vncLoginPass, g_base64_encode((const unsigned char *)vLoginPassVal, strlen(vLoginPassVal)));
+  char * vLoginPassDecoded = g_base64_encode((const unsigned char *)vLoginPassVal, strlen(vLoginPassVal));
+  g_string_assign(con->vncLoginPass, vLoginPassDecoded);
+  g_free(vLoginPassDecoded);
 
   // vnc image quality
   con->quality = gtk_combo_box_get_active(GTK_COMBO_BOX(settings->vncQuality));
@@ -687,113 +659,81 @@ void svHandleConnectionSettingsSave (GtkButton * self, gpointer userData)
   svConfigWrite();
 
   // ========= add to the hostlist and connections if this is a new connection =========
-  if (app->addNewConnection == true) // && strcmp(con->address->str, "") != 0)
+  if (app->addNewConnection) // && strcmp(con->address->str, "") != 0)
   {
-    // if no connection name, warn user
-    if (strcmp(con->name->str, "") == 0)
-    {
-      GtkWidget * dialog = gtk_message_dialog_new_with_markup(GTK_WINDOW(settings->settingsWin),
-                                      GTK_DIALOG_DESTROY_WITH_PARENT,
-                                      GTK_MESSAGE_ERROR,
-                                      GTK_BUTTONS_CLOSE,
-                                      "<b>Error: 'Connection name' cannot be empty</b>\n\nPlease enter a "
-                                        "connection name then try saving again");
-      gtk_dialog_run(GTK_DIALOG(dialog));
-      gtk_widget_destroy(dialog);
-
-      // focus remote address
-      gtk_widget_grab_focus(settings->connectionName);
-
-      return;
-    }
-
-    // if no host address, warn user
-    if (strcmp(con->address->str, "") == 0)
-    {
-      GtkWidget * dialog = gtk_message_dialog_new_with_markup(GTK_WINDOW(settings->settingsWin),
-                                      GTK_DIALOG_DESTROY_WITH_PARENT,
-                                      GTK_MESSAGE_ERROR,
-                                      GTK_BUTTONS_CLOSE,
-                                      "<b>Error: 'Remote Address' cannot be empty</b>\n\nPlease enter a "
-                                        "valid remote address then try saving again");
-      gtk_dialog_run(GTK_DIALOG(dialog));
-      gtk_widget_destroy(dialog);
-
-      // focus remote address
-      gtk_widget_grab_focus(settings->remoteAddress);
-
-      return;
-    }
-
     // check if a connection exists with the same name
-    Connection * conTemp = svConnectionFromName(con->name->str);
+    GList * rows = gtk_container_get_children(GTK_CONTAINER(app->serverList));
 
-    // if a connection exists with this name, warn user
-    if (conTemp != NULL)
+    for (GList * l = rows; l; l = l->next)
     {
-      GtkWidget * dialog = gtk_message_dialog_new_with_markup(GTK_WINDOW(settings->settingsWin),
-                                        GTK_DIALOG_DESTROY_WITH_PARENT,
-                                        GTK_MESSAGE_ERROR,
-                                        GTK_BUTTONS_CLOSE,
-                                        "<b>Error: Connection name already exists</b>\n\nPlease change the "
-                                          "connection's name then try saving again");
-      gtk_dialog_run(GTK_DIALOG(dialog));
-      gtk_widget_destroy(dialog);
+        GtkListBoxRow * row = l->data;
+        GtkWidget * box = gtk_bin_get_child(GTK_BIN(row));
 
-      // focus the connection name
-      gtk_widget_grab_focus(settings->connectionName);
+        Connection * conTemp = g_object_get_data(G_OBJECT(box), "con");
+        if (!conTemp)
+            continue;
 
-      return;
+        // if a connection exists with this name, warn user
+        if (strcmp(conTemp->name->str, con->name->str) == 0)
+        {
+          GtkWidget * dialog = gtk_message_dialog_new_with_markup(GTK_WINDOW(settings->settingsWin),
+                                            GTK_DIALOG_DESTROY_WITH_PARENT,
+                                            GTK_MESSAGE_ERROR,
+                                            GTK_BUTTONS_CLOSE,
+                                            "<b>Error: Connection name already exists</b>\n\nPlease change the "
+                                              "connection's name then try saving again");
+          gtk_dialog_run(GTK_DIALOG(dialog));
+          gtk_widget_destroy(dialog);
+
+          // focus the connection name
+          gtk_widget_grab_focus(settings->connectionName);
+
+          return;
+        }
     }
-
-    // get currently selected row (if any)
-    GtkListBoxRow * row = gtk_list_box_get_selected_row(GTK_LIST_BOX(app->serverList));
 
     int rowIdx = -1;
 
-    // get currently selected connection list row
-    if (row != NULL)
-      rowIdx = gtk_list_box_row_get_index(row);
+    char * lastGroup = NULL;
+    gboolean myGroupFound = false;
 
-    // if we're at the empty first list row, find the last of this connection's
-    // group and insert afterward
-    if (rowIdx == 0)
+    // go through connections glist and find last of this group
+    for (GList * l = rows; l; l = l->next)
     {
-      rowIdx = -1;
-      char * lastGroup = NULL;
+      GtkListBoxRow * row = l->data;
+      GtkWidget * box = gtk_bin_get_child(GTK_BIN(row));
 
-      // go through connections glist and find last of this group
-      for (GList * l = app->connections; l != NULL; l = l->next)
+      Connection * conTemp = g_object_get_data(G_OBJECT(box), "con");
+
+      // break if we are at the end of this new connection's group
+      if (conTemp)
       {
-        conTemp = (Connection *)l->data;
+        // checking if we need to add an empty row before our new connection
+        if (conTemp && conTemp->group->len > 0 && strcmp(conTemp->group->str, con->group->str) == 0)
+          myGroupFound = true;
 
-        // break if we are at the end of this new connection's group
-        if (conTemp != NULL)
-        {
-          if (lastGroup != NULL
-            && strcmp(conTemp->group->str, lastGroup) != 0
-            && strcmp(lastGroup, con->group->str) == 0)
-            break;
+        // get out of loop if we just left our group into another
+        if (lastGroup && strcmp(conTemp->group->str, lastGroup) != 0 &&
+          strcmp(lastGroup, con->group->str) == 0)
+          break;
 
-          lastGroup = conTemp->group->str;
-        }
-
-        rowIdx++;
+        lastGroup = conTemp->group->str;
       }
-    }
-    else
-    {
-      // add 1 if the currently selected row is not -1
-      if (rowIdx != -1)
-        rowIdx++;
+
+      rowIdx++;
     }
 
-    // insert connection to connections GList
-    app->connections = g_list_insert(app->connections, con, rowIdx);
+    g_list_free(rows);
 
     // insert into connections list at currently selected location or
     // the end of the list if rowIdx is -1
-    svInsertHostListRow(con->name->str, rowIdx);
+
+    // insert empty row before new connection (with new group)
+    if (!myGroupFound)
+      svInsertHostListRow("", rowIdx, NULL);
+
+    // insert new connection
+    svInsertHostListRow(con->name->str, rowIdx, con);
 
     app->addNewConnection = false;
 
@@ -807,7 +747,6 @@ void svHandleConnectionSettingsSave (GtkButton * self, gpointer userData)
   g_free(settings);
 
   // update stuff if connected
-
   if (con->state == SV_STATE_CONNECTED)
   {
     // set image quality
@@ -841,7 +780,7 @@ void svHandleConnectionSettingsCancel (GtkButton* self, gpointer userData)
 {
   ConnectionSettings * settings = (ConnectionSettings *)userData;
 
-  if (settings == NULL || settings->settingsWin == NULL)
+  if (!settings || !settings->settingsWin)
     return;
 
   // log
@@ -861,13 +800,11 @@ void svHandleConnectionSettingsCancel (GtkButton* self, gpointer userData)
 void svHandleConnectionSSHPrivKey (GtkButton * self, gpointer userData)
 {
   ConnectionSettings * settings = (ConnectionSettings *)userData;
-
-  if (settings == NULL || settings->settingsWin == NULL)
+  if (!settings || !settings->settingsWin)
     return;
 
   GtkWidget * entry = settings->sshPrivateKey;
-
-  if (entry == NULL || GTK_IS_ENTRY(entry) == false)
+  if (!entry || !GTK_IS_ENTRY(entry))
     return;
 
   GtkWidget * dialog;
@@ -887,7 +824,7 @@ void svHandleConnectionSSHPrivKey (GtkButton * self, gpointer userData)
 
   if (res == GTK_RESPONSE_ACCEPT)
   {
-    char * filename;
+    char * filename;  //  <<<-- do NOT make const char *
     GtkFileChooser * chooser = GTK_FILE_CHOOSER(dialog);
     filename = gtk_file_chooser_get_filename(chooser);
     gtk_entry_set_text(GTK_ENTRY(entry), filename);
@@ -902,9 +839,8 @@ void svHandleConnectionSSHPrivKey (GtkButton * self, gpointer userData)
 /* create and display connection edit window */
 void svShowAppOptionsWindow ()
 {
-  AppOptions * opts = (AppOptions *)malloc(sizeof(AppOptions));
-
-  if (opts == NULL)
+  AppOptions * opts = g_new0(AppOptions, 1);
+  if (!opts)
     return;
 
   // log
@@ -938,7 +874,7 @@ void svShowAppOptionsWindow ()
   GtkWidget * lblTooltips = gtk_label_new("Show tooltips");
   gtk_widget_set_halign(lblTooltips, GTK_ALIGN_END);
   opts->showTooltips = gtk_check_button_new();
-  if (app->showTooltips == true)
+  if (app->showTooltips)
     gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(opts->showTooltips), true);
   svSetTooltip(opts->showTooltips, "Displays tooltips for most app items");
 
@@ -951,7 +887,7 @@ void svShowAppOptionsWindow ()
   opts->logToFile = gtk_check_button_new();
   svSetTooltip(opts->logToFile, "Logs most app events to a log file");
 
-  if (app->logToFile == true)
+  if (app->logToFile)
     gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(opts->logToFile), true);
 
   gtk_grid_attach(GTK_GRID(optsPage), lblLog, 1, rowNum, 1, 1);
@@ -1036,20 +972,25 @@ void svShowAppOptionsWindow ()
 /* create and display connection edit window */
 void svShowConnectionEditWindow (Connection * con)
 {
-  if (con == NULL || strcmp(con->name->str, "") == 0)
+  if (!con || con->name->len == 0)
     return;
 
-  ConnectionSettings * settings = (ConnectionSettings *)malloc(sizeof(ConnectionSettings));
-
-  if (settings == NULL)
+  ConnectionSettings * settings = g_new0(ConnectionSettings, 1);
+  if (!settings)
     return;
 
   // log
-  char logStr[FILENAME_MAX] = {0};
-  snprintf(logStr, FILENAME_MAX - 1, "Editing connection '%s - %s'", con->name->str, con->address->str);
+  char logStr[SV_LONG_STRING_SIZE] = {0};
+  snprintf(logStr, SV_LONG_STRING_SIZE - 1, "Editing connection '%s - %s'", con->name->str, con->address->str);
   svLog(logStr, true);
 
   settings->con = con;
+
+  gboolean preventConnectedEditing = false;
+
+  // don't allow editing of certain things if we're waiting or connected
+  if (con->state == SV_STATE_WAITING || con->state == SV_STATE_CONNECTED)
+    preventConnectedEditing = true;
 
   // create edit window
   settings->settingsWin = gtk_window_new(GTK_WINDOW_TOPLEVEL);
@@ -1082,6 +1023,8 @@ void svShowConnectionEditWindow (Connection * con)
   GtkWidget * lblConName = gtk_label_new("Connection name");
   gtk_widget_set_halign(lblConName, GTK_ALIGN_END);
   settings->connectionName = gtk_entry_new();
+  if (preventConnectedEditing)
+    gtk_widget_set_sensitive(GTK_WIDGET(settings->connectionName), false);
   gtk_entry_set_width_chars(GTK_ENTRY(settings->connectionName), 30);
   gtk_entry_set_text(GTK_ENTRY(settings->connectionName), con->name->str);
   svSetTooltip(settings->connectionName, "The name you choose for this connection "
@@ -1094,6 +1037,8 @@ void svShowConnectionEditWindow (Connection * con)
   GtkWidget * lblConGroup = gtk_label_new("Connection group");
   gtk_widget_set_halign(lblConGroup, GTK_ALIGN_END);
   settings->connectionGroup = gtk_entry_new();
+  if (preventConnectedEditing)
+    gtk_widget_set_sensitive(GTK_WIDGET(settings->connectionGroup), false);
   gtk_entry_set_width_chars(GTK_ENTRY(settings->connectionGroup), 30);
   gtk_entry_set_text(GTK_ENTRY(settings->connectionGroup), con->group->str);
   svSetTooltip(settings->connectionGroup, "The group this connection belongs to");
@@ -1105,6 +1050,8 @@ void svShowConnectionEditWindow (Connection * con)
   GtkWidget * lblConAddr = gtk_label_new("Remote address");
   gtk_widget_set_halign(lblConAddr, GTK_ALIGN_END);
   settings->remoteAddress = gtk_entry_new();
+  if (preventConnectedEditing)
+    gtk_widget_set_sensitive(GTK_WIDGET(settings->remoteAddress), false);
   gtk_entry_set_width_chars(GTK_ENTRY(settings->remoteAddress), 30);
   gtk_entry_set_text(GTK_ENTRY(settings->remoteAddress), con->address->str);
   svSetTooltip(settings->remoteAddress, "The network address of the remote host");
@@ -1125,9 +1072,9 @@ void svShowConnectionEditWindow (Connection * con)
   gtk_grid_attach(GTK_GRID(vncPage), settings->f12Macro, 2, 4, 3, 1);
 
   // vnc or vnc-over-ssh
-  bool allowConnectionTypeChange = true;
+  gboolean allowConnectionTypeChange = true;
 
-  if (con->type == SV_TYPE_VNC_REVERSE)
+  if (con->type == SV_TYPE_VNC_REVERSE || preventConnectedEditing)
     allowConnectionTypeChange = false;
 
   GtkWidget * boxVNCChoice = gtk_box_new(GTK_ORIENTATION_VERTICAL, 3);
@@ -1163,6 +1110,8 @@ void svShowConnectionEditWindow (Connection * con)
   GtkWidget * lblVNCPort = gtk_label_new("VNC port");
   gtk_widget_set_halign(lblVNCPort, GTK_ALIGN_END);
   settings->vncPort = gtk_entry_new();
+  if (preventConnectedEditing)
+    gtk_widget_set_sensitive(GTK_WIDGET(settings->vncPort), false);
   gtk_entry_set_width_chars(GTK_ENTRY(settings->vncPort), 10);
   gtk_entry_set_text(GTK_ENTRY(settings->vncPort), con->vncPort->str);
   svSetTooltip(settings->vncPort, "The remote host's numbered VNC port");
@@ -1174,11 +1123,14 @@ void svShowConnectionEditWindow (Connection * con)
   GtkWidget * lblVNCPass = gtk_label_new("VNC password");
   gtk_widget_set_halign(lblVNCPass, GTK_ALIGN_END);
   settings->vncPassword = gtk_entry_new();
+  if (preventConnectedEditing)
+    gtk_widget_set_sensitive(GTK_WIDGET(settings->vncPassword), false);
   gtk_entry_set_width_chars(GTK_ENTRY(settings->vncPassword), 30);
   gtk_entry_set_visibility(GTK_ENTRY(settings->vncPassword), false);
   gsize vncPassOutLen = 0;
   unsigned char * vncPassTemp = g_base64_decode(con->vncPass->str, &vncPassOutLen);
   gtk_entry_set_text(GTK_ENTRY(settings->vncPassword), (const char *)vncPassTemp);
+  g_free(vncPassTemp);
   svSetTooltip(settings->vncPassword, "The standard VNC password");
 
   gtk_grid_attach(GTK_GRID(vncPage), lblVNCPass, 1, 7, 1, 1);
@@ -1188,6 +1140,8 @@ void svShowConnectionEditWindow (Connection * con)
   GtkWidget * lblVNCLoginName = gtk_label_new("VNC login username");
   gtk_widget_set_halign(lblVNCLoginName, GTK_ALIGN_END);
   settings->vncLoginUsername = gtk_entry_new();
+  if (preventConnectedEditing)
+    gtk_widget_set_sensitive(GTK_WIDGET(settings->vncLoginUsername), false);
   gtk_entry_set_width_chars(GTK_ENTRY(settings->vncLoginUsername), 30);
   gtk_entry_set_text(GTK_ENTRY(settings->vncLoginUsername), con->vncLoginUser->str);
   svSetTooltip(settings->vncLoginUsername, "The username used with VNC 'login' authentication");
@@ -1199,11 +1153,14 @@ void svShowConnectionEditWindow (Connection * con)
   GtkWidget * lblVNCLoginPass = gtk_label_new("VNC login password");
   gtk_widget_set_halign(lblVNCLoginPass, GTK_ALIGN_END);
   settings->vncLoginPassword = gtk_entry_new();
+  if (preventConnectedEditing)
+    gtk_widget_set_sensitive(GTK_WIDGET(settings->vncLoginPassword), false);
   gtk_entry_set_width_chars(GTK_ENTRY(settings->vncLoginPassword), 30);
   gtk_entry_set_visibility(GTK_ENTRY(settings->vncLoginPassword), false);
   gsize vncLoginPassOutLen = 0;
   unsigned char * vncLoginPassTemp = g_base64_decode(con->vncLoginPass->str, &vncLoginPassOutLen);
   gtk_entry_set_text(GTK_ENTRY(settings->vncLoginPassword), (const char *)vncLoginPassTemp);
+  g_free(vncLoginPassTemp);
   svSetTooltip(settings->vncLoginPassword, "The password used with VNC 'login' authentication");
 
   gtk_grid_attach(GTK_GRID(vncPage), lblVNCLoginPass, 1, 9, 1, 1);
@@ -1213,6 +1170,8 @@ void svShowConnectionEditWindow (Connection * con)
   GtkWidget * lblVNCQuality = gtk_label_new("VNC quality");
   gtk_widget_set_halign(lblVNCQuality, GTK_ALIGN_END);
   settings->vncQuality = gtk_combo_box_text_new();
+  if (preventConnectedEditing)
+    gtk_widget_set_sensitive(GTK_WIDGET(settings->vncQuality), false);
 
   gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(settings->vncQuality), "Low");
   gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(settings->vncQuality), "Medium");
@@ -1229,7 +1188,9 @@ void svShowConnectionEditWindow (Connection * con)
   GtkWidget * lblVNCLossy = gtk_label_new("VNC lossy encoding");
   gtk_widget_set_halign(lblVNCLossy, GTK_ALIGN_END);
   settings->vncLossyEncoding = gtk_check_button_new();
-  if (con->lossyEncoding == true)
+  if (preventConnectedEditing)
+    gtk_widget_set_sensitive(GTK_WIDGET(settings->vncLossyEncoding), false);
+  if (con->lossyEncoding)
     gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(settings->vncLossyEncoding), true);
   svSetTooltip(settings->vncLossyEncoding, "Enables the remote host's lossy encoding");
 
@@ -1240,7 +1201,7 @@ void svShowConnectionEditWindow (Connection * con)
   GtkWidget * lblVNCScaling = gtk_label_new("VNC scaling");
   gtk_widget_set_halign(lblVNCScaling, GTK_ALIGN_END);
   settings->vncScaling = gtk_check_button_new();
-  if (con->scale == true)
+  if (con->scale)
     gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(settings->vncScaling), true);
   svSetTooltip(settings->vncScaling, "Scales the remote host's display");
 
@@ -1261,6 +1222,8 @@ void svShowConnectionEditWindow (Connection * con)
   GtkWidget * lblSSHName = gtk_label_new("SSH username");
   gtk_widget_set_halign(lblSSHName, GTK_ALIGN_END);
   settings->sshUsername = gtk_entry_new();
+  if (preventConnectedEditing)
+    gtk_widget_set_sensitive(GTK_WIDGET(settings->sshUsername), false);
   gtk_entry_set_width_chars(GTK_ENTRY(settings->sshUsername), 30);
   gtk_entry_set_text(GTK_ENTRY(settings->sshUsername), con->sshUser->str);
   svSetTooltip(settings->sshUsername, "The username used for the remote host's SSH server");
@@ -1272,6 +1235,8 @@ void svShowConnectionEditWindow (Connection * con)
   GtkWidget * lblSSHPort = gtk_label_new("SSH port");
   gtk_widget_set_halign(lblSSHPort, GTK_ALIGN_END);
   settings->sshPort = gtk_entry_new();
+  if (preventConnectedEditing)
+    gtk_widget_set_sensitive(GTK_WIDGET(settings->sshPort), false);
   gtk_entry_set_width_chars(GTK_ENTRY(settings->sshPort), 10);
   gtk_entry_set_text(GTK_ENTRY(settings->sshPort), con->sshPort->str);
   svSetTooltip(settings->sshPort, "The remote host's numbered SSH server's port");
@@ -1283,12 +1248,16 @@ void svShowConnectionEditWindow (Connection * con)
   GtkWidget * lblSSHPrivKey = gtk_label_new("SSH private key (if any)");
   gtk_widget_set_halign(lblSSHPrivKey, GTK_ALIGN_END);
   settings->sshPrivateKey = gtk_entry_new();
+  if (preventConnectedEditing)
+    gtk_widget_set_sensitive(GTK_WIDGET(settings->sshPrivateKey), false);
   gtk_entry_set_width_chars(GTK_ENTRY(settings->sshPrivateKey), 30);
   gtk_entry_set_text(GTK_ENTRY(settings->sshPrivateKey), con->sshPrivKeyfile->str);
   svSetTooltip(settings->sshPrivateKey, "The private key (if any) used to authenticate on the remote "
     "host's SSH server");
 
   GtkWidget * btnSSHPrivKey = gtk_button_new_with_label("...");
+  if (preventConnectedEditing)
+    gtk_widget_set_sensitive(GTK_WIDGET(btnSSHPrivKey), false);
   g_signal_connect(btnSSHPrivKey, "clicked", G_CALLBACK(svHandleConnectionSSHPrivKey), settings->sshPrivateKey);
   svSetTooltip(btnSSHPrivKey, "Click to select a private key for the remote host's SSH server");
 
@@ -1319,7 +1288,7 @@ void svShowConnectionEditWindow (Connection * con)
   GtkWidget * lblCmd1Enabled = gtk_label_new("Enabled");
   gtk_widget_set_halign(lblCmd1Enabled, GTK_ALIGN_END);
   settings->cmd1Enabled = gtk_check_button_new();
-  if (con->customCmd1Enabled == true)
+  if (con->customCmd1Enabled)
     gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(settings->cmd1Enabled), true);
   svSetTooltip(settings->cmd1Enabled, "Enables custom command 1");
 
@@ -1361,7 +1330,7 @@ void svShowConnectionEditWindow (Connection * con)
   GtkWidget * lblCmd2Enabled = gtk_label_new("Enabled");
   gtk_widget_set_halign(lblCmd2Enabled, GTK_ALIGN_END);
   settings->cmd2Enabled = gtk_check_button_new();
-  if (con->customCmd2Enabled == true)
+  if (con->customCmd2Enabled)
     gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(settings->cmd2Enabled), true);
   svSetTooltip(settings->cmd2Enabled, "Enables custom command 2");
 
@@ -1403,7 +1372,7 @@ void svShowConnectionEditWindow (Connection * con)
   GtkWidget * lblCmd3Enabled = gtk_label_new("Enabled");
   gtk_widget_set_halign(lblCmd3Enabled, GTK_ALIGN_END);
   settings->cmd3Enabled = gtk_check_button_new();
-  if (con->customCmd3Enabled == true)
+  if (con->customCmd3Enabled)
     gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(settings->cmd3Enabled), true);
   svSetTooltip(settings->cmd3Enabled, "Enables custom command 3");
 
@@ -1469,20 +1438,20 @@ void svShowConnectionEditWindow (Connection * con)
 
 
 /* handle app->parent divider position change */
-void svHandlePaneDividerChange (GtkPaned * self, GtkScrollType * scroll_type, gpointer userData)
+void svHandlePaneDividerChange (GtkPaned * paned, GtkScrollType * scroll_type, gpointer userData)
 {
-  if (self == NULL)
+  if (!paned)
     return;
 
   // store handle position (basically 'list width')
-  app->serverListWidth = gtk_paned_get_position(self);
+  app->serverListWidth = gtk_paned_get_position(paned);
 }
 
 
 /* handle main window state changes */
-void svHandleMainWinChange (GtkWidget * self, GdkEventWindowState * event, gpointer userData)
+void svHandleMainWinChange (GtkWidget * widget, GdkEventWindowState * event, gpointer userData)
 {
-  if (self == NULL || self != app->mainWin)
+  if (!widget || widget != app->mainWin)
     return;
 
   // set app->maximized value based on window state
@@ -1515,13 +1484,12 @@ void svSetMenuItemTooltips ()
 void svCheckForNewConnectionAdd ()
 {
   // if nothing was added, prompt user to create a new connection
-  if (app->addNewConnection == false)
+  if (!app->addNewConnection)
     return;
 
   // create and edit new connection
-  Connection * con = (Connection *)malloc(sizeof(Connection));
-
-  if (con == NULL)
+  Connection * con = g_new0(Connection, 1);
+  if (!con)
     return;
 
   svInitConnObject(con);
@@ -1534,48 +1502,46 @@ void svCheckForNewConnectionAdd ()
   svShowConnectionEditWindow(con);
 }
 
+
 /* handle reverse vnc connection */
 gboolean svHandleReverseConnection (gpointer data)
 {
   GSocket * sock = (GSocket *)data;
-
-  if (sock == NULL)
+  if (!sock)
     return false;
 
   GSocket * client = g_socket_accept(sock, NULL, NULL);
-  //int fd = g_socket_get_fd(client);
-
-  //VncConnection * conn = vnc_connection_new();
-  //vnc_connection_open_fd(conn, fd);
 
   // create new connection object
-  Connection * con = (Connection *)malloc(sizeof(Connection));
+  Connection * con = g_new0(Connection, 1);
 
-  if (con == NULL)
+  if (!con)
     return false;
 
   svInitConnObject(con);
 
   // make time string
   GDateTime * now = g_date_time_new_now_local();
-  const char * nowStr = g_date_time_format(now, "Listening-%Y%m%d%H%M%S");
+  char * nowStr = g_date_time_format(now, "Listening-%Y%m%d%H%M%S");  //  <<<--- do NOT make const char *
 
   // set up new connection
   g_string_assign(con->name, nowStr);
   g_string_assign(con->group, "Listening");
   con->type = SV_TYPE_VNC_REVERSE;
+  con->quality = SV_QUAL_MEDIUM;
   con->listenFd = g_socket_get_fd(client);
-
-  // append connection to connection list
-  app->connections = g_list_append(app->connections, con);
+  con->scale = true;
 
   // create box, image and label for listbox row
-  svInsertHostListRow(con->name->str, -1);
+  svInsertHostListRow(con->name->str, -1, con);
 
   svConnectionCreate(con);
 
-  printf("Reverse connection attempt\n");
-  return true;  //TRUE;
+  //printf("Reverse connection attempt\n");
+  g_free(nowStr);
+  g_date_time_unref(now);
+
+  return true;
 }
 
 
@@ -1631,22 +1597,34 @@ void svHandleListenModeMenuItem ()
 }
 
 
+/* handle window delete properly */
+gboolean svMainWinDeleteEvent(GtkWidget * w, GdkEvent * e, gpointer u)
+{
+  svDoQuit();
+  return false;
+}
+
+
 /* create the main app GUI */
 void svCreateGUI (GtkApplication * gtkApp)
 {
+  if (app->mainWin)
+    return;
+
   // create main window
   app->mainWin = gtk_application_window_new(gtkApp);
   //gtk_application_add_window(app->gApp, GTK_WINDOW(app->mainWin));
   gtk_window_set_title(GTK_WINDOW(app->mainWin), "SpiritVNC");
   gtk_window_set_default_size(GTK_WINDOW(app->mainWin), 1024, 720);
-  gtk_widget_set_hexpand(app->mainWin, false);
-  gtk_widget_set_vexpand(app->mainWin, false);
-  g_signal_connect(app->mainWin, "delete-event", G_CALLBACK(svDoQuit), NULL);
+  g_signal_connect(app->mainWin, "delete-event", G_CALLBACK(svMainWinDeleteEvent), NULL);
 
   // window icon
-  GdkPixbuf * appIcon = gdk_pixbuf_new_from_xpm_data((const char **)xpmSpiritvnc);
-  if (appIcon != NULL)
+  GdkPixbuf * appIcon = gdk_pixbuf_new_from_resource("/com/spiritvnc/pngs/spiritvnc.png", NULL);
+  if (appIcon)
+  {
     gtk_window_set_default_icon(appIcon);
+    g_object_unref(appIcon);
+  }
 
   gtk_window_set_application(GTK_WINDOW(app->mainWin), GTK_APPLICATION(gtkApp));
 
@@ -1670,8 +1648,7 @@ void svCreateGUI (GtkApplication * gtkApp)
 
   // request update
   GtkWidget * upd = gtk_menu_item_new_with_label("Request _update");
-  if (app->toolsItems != NULL)
-    app->toolsItems->requestUpdate = upd;
+  app->toolsItems->requestUpdate = upd;
   gtk_menu_item_set_use_underline(GTK_MENU_ITEM(upd), true);
   gtk_widget_set_sensitive(GTK_WIDGET(upd), false);
   gtk_menu_shell_append(GTK_MENU_SHELL(submenu), upd);
@@ -1681,8 +1658,7 @@ void svCreateGUI (GtkApplication * gtkApp)
 
   // send submenu
   GtkWidget * ssm = gtk_menu_item_new_with_label("Send...");
-  if (app->toolsItems != NULL)
-    app->toolsItems->send = ssm;
+  app->toolsItems->send = ssm;
   gtk_menu_item_set_use_underline(GTK_MENU_ITEM(ssm), true);
   gtk_widget_set_sensitive(GTK_WIDGET(ssm), true);
   gtk_menu_shell_append(GTK_MENU_SHELL(submenu), ssm);
@@ -1695,8 +1671,7 @@ void svCreateGUI (GtkApplication * gtkApp)
 
   // send entered keystrokes
   GtkWidget * sks = gtk_menu_item_new_with_label("_Keys...");
-  if (app->toolsItems != NULL)
-    app->toolsItems->sendEnteredKeys = sks;
+  app->toolsItems->sendEnteredKeys = sks;
   gtk_menu_item_set_use_underline(GTK_MENU_ITEM(sks), true);
   gtk_widget_set_sensitive(GTK_WIDGET(sks), false);
   gtk_menu_shell_append(GTK_MENU_SHELL(sendMen), sks);
@@ -1704,8 +1679,7 @@ void svCreateGUI (GtkApplication * gtkApp)
 
   // send ctrl+alt+del
   GtkWidget * cad = gtk_menu_item_new_with_label("_Ctrl+Alt+Del");
-  if (app->toolsItems != NULL)
-    app->toolsItems->sendCAD = cad;
+  app->toolsItems->sendCAD = cad;
   gtk_menu_item_set_use_underline(GTK_MENU_ITEM(cad), true);
   gtk_widget_set_sensitive(GTK_WIDGET(cad), false);
   gtk_menu_shell_append(GTK_MENU_SHELL(sendMen), cad);
@@ -1713,8 +1687,7 @@ void svCreateGUI (GtkApplication * gtkApp)
 
   // send ctrl+shift+esc
   GtkWidget * cse = gtk_menu_item_new_with_label("_Ctrl+Shift+Esc");
-  if (app->toolsItems != NULL)
-    app->toolsItems->sendCSE = cse;
+  app->toolsItems->sendCSE = cse;
   gtk_menu_item_set_use_underline(GTK_MENU_ITEM(cse), true);
   gtk_widget_set_sensitive(GTK_WIDGET(cse), false);
   gtk_menu_shell_append(GTK_MENU_SHELL(sendMen), cse);
@@ -1724,25 +1697,22 @@ void svCreateGUI (GtkApplication * gtkApp)
 
   // add new
   GtkWidget * add = gtk_menu_item_new_with_label("Add _new connection...");
-  if (app->toolsItems != NULL)
-    app->toolsItems->addNew = add;
+  app->toolsItems->addNew = add;
   gtk_menu_item_set_use_underline(GTK_MENU_ITEM(add), true);
   gtk_menu_shell_append(GTK_MENU_SHELL(submenu), add);
   g_signal_connect(add, "activate", G_CALLBACK(svHandleAddNewConnectionMenuItem), NULL);
 
   // fullscreen
   GtkWidget * ful = gtk_menu_item_new_with_label("Toggle _fullscreen");
-  if (app->toolsItems != NULL)
-    app->toolsItems->fullscreen = ful;
+  app->toolsItems->fullscreen = ful;
   gtk_menu_item_set_use_underline(GTK_MENU_ITEM(ful), true);
   gtk_widget_set_sensitive(GTK_WIDGET(ful), false);
   gtk_menu_shell_append(GTK_MENU_SHELL(submenu), ful);
-  g_signal_connect(ful, "activate", G_CALLBACK(svDoQuit), NULL);
+  //g_signal_connect(ful, "activate", G_CALLBACK(svDoQuit), NULL);
 
   // listen mode
   GtkWidget * lis = gtk_menu_item_new_with_label("Enable _listen mode");
-  if (app->toolsItems != NULL)
-    app->toolsItems->listenMode = lis;
+  app->toolsItems->listenMode = lis;
   gtk_menu_item_set_use_underline(GTK_MENU_ITEM(lis), true);
   gtk_widget_set_sensitive(GTK_WIDGET(lis), true);
   gtk_menu_shell_append(GTK_MENU_SHELL(submenu), lis);
@@ -1750,8 +1720,7 @@ void svCreateGUI (GtkApplication * gtkApp)
 
   // screenshot
   GtkWidget * scr = gtk_menu_item_new_with_label("_Screenshot");
-  if (app->toolsItems != NULL)
-    app->toolsItems->screenshot = scr;
+  app->toolsItems->screenshot = scr;
   gtk_menu_item_set_use_underline(GTK_MENU_ITEM(scr), true);
   gtk_widget_set_sensitive(GTK_WIDGET(scr), false);
   gtk_menu_shell_append(GTK_MENU_SHELL(submenu), scr);
@@ -1759,16 +1728,14 @@ void svCreateGUI (GtkApplication * gtkApp)
 
   // app options
   GtkWidget * ao = gtk_menu_item_new_with_label("_App options");
-  if (app->toolsItems != NULL)
-    app->toolsItems->appOptions = ao;
+  app->toolsItems->appOptions = ao;
   gtk_menu_item_set_use_underline(GTK_MENU_ITEM(ao), true);
   gtk_menu_shell_append(GTK_MENU_SHELL(submenu), ao);
   g_signal_connect(ao, "activate", G_CALLBACK(svShowAppOptionsWindow), NULL);
 
   // quit
   GtkWidget * qui = gtk_menu_item_new_with_label("_Quit");
-  if (app->toolsItems != NULL)
-    app->toolsItems->quit = qui;
+  app->toolsItems->quit = qui;
   gtk_menu_item_set_use_underline(GTK_MENU_ITEM(qui), true);
   gtk_menu_shell_append(GTK_MENU_SHELL(submenu), qui);
   g_signal_connect(qui, "activate", G_CALLBACK(svDoQuit), NULL);
@@ -1792,7 +1759,7 @@ void svCreateGUI (GtkApplication * gtkApp)
   svConfigRead();
 
   // set the left pane width
-  gtk_paned_set_position(GTK_PANED(app->parent), app->serverListWidth);
+  //gtk_paned_set_position(GTK_PANED(app->parent), app->serverListWidth);
 
   gtk_list_box_unselect_all(GTK_LIST_BOX(app->serverList));
 
@@ -1897,7 +1864,7 @@ void svCreateGUI (GtkApplication * gtkApp)
   gtk_widget_show_all(app->mainWin);
 
   // if saved main window state was maximized, maximize the main window
-  if (app->maximized == true)
+  if (app->maximized)
     gtk_window_maximize(GTK_WINDOW(app->mainWin));
 
   // size the hostlist pane
@@ -1915,7 +1882,7 @@ void svCreateGUI (GtkApplication * gtkApp)
 
 
 /* create new config folder(s) and file if none exists */
-bool svConfigCreateNew (bool createEmptyConfigFile)
+gboolean svConfigCreateNew (gboolean createEmptyConfigFile)
 {
   // create app's config folder, making parent folders as necessary
   int result = g_mkdir_with_parents(app->appConfigDir->str, 0755);
@@ -1923,19 +1890,24 @@ bool svConfigCreateNew (bool createEmptyConfigFile)
   // error in folder creation
   if (result == -1)
   {
-    svLog("svConfigCreateNew - Can't create config folder(s)", false);
+    GString * strErr = g_string_new(NULL);
+    int errCode = errno;
+    g_string_printf(strErr, "svConfigCreateNew - Can't create config folder(s) - Error code: %i, %s",
+      errCode, strerror(errCode));
+    svLog(strErr->str, false);
+    g_string_free(strErr, true);
     return false;
   }
 
-  if (createEmptyConfigFile == true)
+  if (createEmptyConfigFile)
   {
     // only create a new empty file if one doesn't exist already
-    if (g_file_test(app->appConfigFile->str, G_FILE_TEST_IS_REGULAR | G_FILE_TEST_EXISTS) == false)
+    if (!g_file_test(app->appConfigFile->str, G_FILE_TEST_IS_REGULAR | G_FILE_TEST_EXISTS))
     {
       svLog("svConfigCreateNew - Creating new empty config file", false);
 
       // --- attempt to write empty config file ---
-      if (g_file_set_contents(app->appConfigFile->str, "\n", -1, NULL) == false)
+      if (!g_file_set_contents(app->appConfigFile->str, "\n", -1, NULL))
       {
         svLog("svConfigCreateNew - Error: SpiritVNC could not write empty config file", false);
         return false;
@@ -1948,44 +1920,43 @@ bool svConfigCreateNew (bool createEmptyConfigFile)
 
 
 /* insert a row into the connection listbox */
-void svInsertHostListRow (char * rowText, int idx)
+void svInsertHostListRow (const char * rowText, int idx, Connection * con)
 {
-  if (rowText == NULL)
-  {
-    svLog("svInsertHostlistRow - rowText is null", false);
+  if (!rowText)  // do NOT check con for NULL here, it's okay if it's null
     return;
-  }
 
   // box
-  GtkWidget * box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 3);
+  GtkWidget * rowBox = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 3);
+  if (!rowBox)
+    return;
+
+  // assign a connection to the row, if available
+  g_object_set_data(G_OBJECT(rowBox), "con", con);
 
   // image
   GdkPixbuf * pb;
 
   if (strcmp(rowText, "") != 0)
-    pb = gdk_pixbuf_new_from_xpm_data((const char **)xpmDisconnected);
+    pb = gdk_pixbuf_new_from_resource("/com/spiritvnc/pngs/disconnected.png", NULL);
   else
-    pb = gdk_pixbuf_new_from_xpm_data((const char **)xpmBlank);
+    pb = gdk_pixbuf_new_from_resource("/com/spiritvnc/pngs/blank.png", NULL);
 
   GtkWidget * img = gtk_image_new_from_pixbuf(pb);
-
-  if (img == NULL)
-    svLog("svInsertHostListRow - img is null", false);
 
   // label
   GtkWidget * label = gtk_label_new(rowText);
   gtk_widget_set_halign(label, GTK_ALIGN_START);
 
   // add img and label to box
-  gtk_box_pack_start(GTK_BOX(box), img, false, false, 3);
-  gtk_box_pack_start(GTK_BOX(box), label, false, false, 0);
+  gtk_box_pack_start(GTK_BOX(rowBox), img, false, false, 3);
+  gtk_box_pack_start(GTK_BOX(rowBox), label, false, false, 0);
 
   gtk_widget_set_visible(img, true);
   gtk_widget_set_visible(label, true);
-  gtk_widget_set_visible(box, true);
+  gtk_widget_set_visible(rowBox, true);
 
   // add box to connections listbox
-  gtk_list_box_insert(GTK_LIST_BOX(app->serverList), box, idx);
+  gtk_list_box_insert(GTK_LIST_BOX(app->serverList), rowBox, idx);
 }
 
 
@@ -1993,310 +1964,291 @@ void svInsertHostListRow (char * rowText, int idx)
 void svConfigRead ()
 {
   GError * readError = NULL;
-  gsize fileSize = 0;  // leave this as gsize
 
   char * strIn = NULL;
 
   // check and create any missing config folders
-  if (svConfigCreateNew(true) == false)
+  if (!svConfigCreateNew(true))
   {
     svLog("svConfigRead - Could not create new config dirs or file - quitting app", false);
     exit(-1);
   }
 
-  // open config file for reading
-  if (g_file_get_contents(app->appConfigFile->str, &strIn, &fileSize, &readError) == false)
+  // read config file contents into strIn
+  if (!g_file_get_contents(app->appConfigFile->str, &strIn, NULL, &readError))
   {
-    char errStr[FILENAME_MAX] = {0};
+    GString * errStr = g_string_new(NULL);
 
-    if (readError != NULL)
-      snprintf(errStr, FILENAME_MAX - 1, "svConfigRead - Error opening config file\nError: %s", readError->message);
+    if (readError)
+      g_string_printf(errStr, "svConfigRead - Error opening config file\nError: %s", readError->message);
     else
-      strcpy(errStr, "svConfigRead - Error opening config file - No error reported");
+      g_string_assign(errStr, "svConfigRead - Error opening config file - No error reported");
 
-    svLog(errStr, false);
+    svLog(errStr->str, false);
+    g_string_free(errStr, true);
   }
 
-  // log if strIn is null
-  if (strIn == NULL)
-    svLog("svConfigRead - File read variable is NULL after read attempt", false);
+  //printf("DEBUG: svConfigRead - readError pointer = %p\n", (void*)readError);
 
-  // config file read-in variables
-  char strLine[FILENAME_MAX];
-  uint32_t intPos = 0;
-  char * charEqPos = NULL;
-  int eqPos = -1;
-  char charIn = 0;
+  if (readError)
+    g_error_free(readError);
 
-  char strProp[100] = {0};
-  char strVal[FILENAME_MAX] = {0};
+  // get out if strIn is null
+  if (!strIn)
+    return;
 
-  char strLastGroup[FILENAME_MAX] = {0};
-
-  Connection * con = (Connection *)malloc(sizeof(Connection));
+  // create initial con object
+  Connection * con = g_new0(Connection, 1);
   svInitConnObject(con);
 
-  // go through file content string and parse properties / values
-  for (unsigned int ii = 0; ii < fileSize; ii++)
+  char ** lines = g_strsplit(strIn, "\n", -1);  //  <<<--- do NOT make const char **
+
+  g_free(strIn);
+
+  GString * strLastGroup = g_string_new(NULL);
+
+  // process each line
+  for (char ** line = lines; *line != NULL; line++)
   {
-    charIn = strIn[ii];
+    // process each line
 
-    // newline, process line
-    if (charIn == '\n' || charIn == '\r')
+    // split up property and value
+    char ** propAndVal = g_strsplit(*line, "=", 2);
+
+    // property and value must both be non-null
+    if (!propAndVal[0] || !propAndVal[1])
     {
-      strLine[intPos] = '\0';
-      intPos = 0;
+      g_strfreev(propAndVal);
+      continue;
+    }
 
-      // if there's = sign in the line, process it
-      charEqPos = strchr(strLine, '=');
+    // trim whitespace (in-place)
+    g_strstrip(propAndVal[0]);
+    g_strstrip(propAndVal[1]);
 
-      if (charEqPos != NULL)
+    // assign prop and vals
+    GString * strProp = g_string_new(propAndVal[0]);
+    GString * strVal = g_string_new(propAndVal[1]);
+
+    g_strfreev(propAndVal);
+
+    //printf("Prop: %s, Val: %s\n", strProp->str, strVal->str);
+
+    // ** start assigning values to properties **
+
+    // ===== app settings =====
+
+    // * serverListWidth *
+    if (strcmp(strProp->str, "hostlistwidth") == 0)
+    {
+      app->serverListWidth = atoi(strVal->str);
+
+      if (app->serverListWidth < 1)
+        app->serverListWidth = 120;
+    }
+
+    // * showTooltips *
+    if (strcmp(strProp->str, "showtooltips") == 0)
+      app->showTooltips = svStringToBool(strVal->str);
+
+    // * maximized *
+    if (strcmp(strProp->str, "maximized") == 0)
+      app->maximized = svStringToBool(strVal->str);
+
+    // * log to file *
+    if (strcmp(strProp->str, "logtofile") == 0)
+      app->logToFile = svStringToBool(strVal->str);
+
+    // * debug mode *
+    if (strcmp(strProp->str, "debugmode") == 0)
+      app->debugMode = svStringToBool(strVal->str);
+
+    // * scan wait time *
+    if (strcmp(strProp->str, "scantimeout") == 0)
+      app->scanTimeout = atoi(strVal->str);
+
+    // * vnc connect timeout *
+    if (strcmp(strProp->str, "vnctimeout") == 0)
+      app->vncConnectWaitTime = atoi(strVal->str);
+
+    // * ssh command *
+    if (strcmp(strProp->str, "sshcommand") == 0)
+      g_string_assign(app->sshCommand, strVal->str);
+
+    // * ssh connect timeout *
+    if (strcmp(strProp->str, "sshtimeout") == 0)
+      app->sshConnectWaitTime = atoi(strVal->str);
+
+    // ===== individual connection settings =====
+
+    // * connName *
+    if (strcmp(strProp->str, "host") == 0)
+    {
+      // if there was a previous con object, add it
+      // to the connections GList
+      if (con->name && con->name->len > 0)
       {
-        // zero out prop and val variables
-        memset(strProp, '\0', 100);
-        memset(strVal, '\0', FILENAME_MAX);
+        // create box, image and label for listbox row
+        svInsertHostListRow(con->name->str, -1, con);
 
-        // find position of first '=' char
-        eqPos = charEqPos - strLine;
-
-        // copy prop and val to appropriate variables
-        strncpy(strProp, strLine, eqPos);
-        strncpy(strVal, charEqPos + 1, FILENAME_MAX - 1);
-
-        //printf("prop: %s, val: %s\n", strProp, strVal);
-
-        // if we have an empty / null prop, don't process this line
-        if (strProp[0] == '\0')
-          continue;
-
-        // fix null values
-        if (strVal[0] == '\0')
-          strcpy(strVal, "");
-
-        // ** start assigning values to properties **
-
-        // ===== app settings =====
-
-        // * serverListWidth *
-        if (strcmp(strProp, "hostlistwidth") == 0)
-        {
-          app->serverListWidth = atoi(strVal);
-
-          if (app->serverListWidth < 1)
-            app->serverListWidth = 120;
-        }
-
-        // * showTooltips *
-        if (strcmp(strProp, "showtooltips") == 0)
-          app->showTooltips = svStringToBool(strVal);
-
-        // * maximized *
-        if (strcmp(strProp, "maximized") == 0)
-          app->maximized = svStringToBool(strVal);
-
-        // * log to file *
-        if (strcmp(strProp, "logtofile") == 0)
-          app->logToFile = svStringToBool(strVal);
-
-        // * debug mode *
-        if (strcmp(strProp, "debugmode") == 0)
-          app->debugMode = svStringToBool(strVal);
-
-        // * scan wait time *
-        if (strcmp(strProp, "scantimeout") == 0)
-          app->scanTimeout = atoi(strVal);
-
-        // * vnc connect timeout *
-        if (strcmp(strProp, "vnctimeout") == 0)
-          app->vncConnectWaitTime = atoi(strVal);
-
-        // * ssh command *
-        if (strcmp(strProp, "sshcommand") == 0)
-          g_string_assign(app->sshCommand, strVal);
-
-        // * ssh connect timeout *
-        if (strcmp(strProp, "sshtimeout") == 0)
-          app->sshConnectWaitTime = atoi(strVal);
-
-        // ===== individual connection settings =====
-
-        // * connName *
-        if (strcmp(strProp, "host") == 0)
-        {
-          // if there was a previous con object, add it
-          // to the connections GList
-          if (con->name != NULL && strcmp(con->name->str, "") != 0)
-          {
-            // append connection to connection list
-            app->connections = g_list_append(app->connections, con);
-
-            // create box, image and label for listbox row
-            svInsertHostListRow(con->name->str, -1);
-
-            app->addNewConnection = false;
-          }
-
-          con = (Connection *)malloc(sizeof(Connection));
-          svInitConnObject(con);
-
-          // connection name
-          g_string_assign(con->name, strVal);
-        }
-
-        // * connGroup *
-        if (strcmp(strProp, "group") == 0)
-        {
-          // add a separator if it's a new group
-          if (strcmp(strVal, strLastGroup) != 0)
-          {
-            app->connections = g_list_append(app->connections, NULL);
-
-            svInsertHostListRow("", -1);
-          }
-
-          g_string_assign(con->group, strVal);
-          strncpy(strLastGroup, strVal, FILENAME_MAX);
-        }
-
-        // * address *
-        if (strcmp(strProp, "address") == 0 || strcmp(strProp, "hostaddress") == 0)
-          g_string_assign(con->address, strVal);
-
-        // * type *
-        if (strcmp(strProp, "type") == 0)
-        {
-          if (strcmp(strVal, "0") == 0 || strcmp(strVal, "v") == 0)
-            con->type = SV_TYPE_VNC;
-          else if (strcmp(strVal, "1") == 0 || strcmp(strVal, "s") == 0)
-            con->type = SV_TYPE_VNC_OVER_SSH;
-          else
-            con->type = SV_TYPE_VNC;
-        }
-
-        // * vncPort *
-        if (strcmp(strProp, "vncport") == 0)
-          g_string_assign(con->vncPort, strVal);
-
-        // * vncPass *
-        if (strcmp(strProp, "vncpass") == 0)
-          g_string_assign(con->vncPass, strVal);
-
-        // * vncLoginUser *
-        if (strcmp(strProp, "vncloginuser") == 0)
-          g_string_assign(con->vncLoginUser, strVal);
-
-        // * vncLoginPass *
-        if (strcmp(strProp, "vncloginpass") == 0)
-          g_string_assign(con->vncLoginPass, strVal);
-
-        // * scaling *
-        if (strcmp(strProp, "scale") == 0)
-          con->scale = svStringToBool(strVal);
-
-        // * showRemoteCursor *
-        if (strcmp(strProp, "showremotecursor") == 0)
-          con->showRemoteCursor = svStringToBool(strVal);
-
-        // * imageQuality *
-        if (strcmp(strProp, "quality") == 0)
-        {
-          if (strcmp(strVal, "0") == 0)
-            con->quality = SV_QUAL_LOW;
-          else if (strcmp(strVal, "1") == 0 || strcmp(strVal, "5") == 0)
-            con->quality = SV_QUAL_MEDIUM;
-          else if (strcmp(strVal, "2") == 0 || strcmp(strVal, "9") == 0)
-            con->quality = SV_QUAL_FULL;
-          else
-            con->quality = SV_QUAL_DEFAULT;
-        }
-
-        // * lossy encoding *
-        if (strcmp(strProp, "lossyencoding") == 0)
-          con->lossyEncoding = svStringToBool(strVal);
-
-        // * sshPort *
-        if (strcmp(strProp, "sshport") == 0)
-          g_string_assign(con->sshPort, strVal);
-
-        // * sshPrivKeyfile *
-        if (strcmp(strProp, "sshkeyprivate") == 0)
-          g_string_assign(con->sshPrivKeyfile, strVal);
-
-        // * sshUser *
-        if (strcmp(strProp, "sshuser") == 0)
-          g_string_assign(con->sshUser, strVal);
-
-        // * f12Macro *
-        if (strcmp(strProp, "f12macro") == 0)
-          g_string_assign(con->f12Macro, strVal);
-
-        // * quicknote *
-        if (strcmp(strProp, "quicknote") == 0)
-          g_string_assign(con->quickNote, strVal);
-
-        // * custom command 1 enabled *
-        if (strcmp(strProp, "customcmd1enabled") == 0 || strcmp(strProp, "customcommand1enabled") == 0)
-          con->customCmd1Enabled = svStringToBool(strVal);
-
-        // * custom command 1 label *
-        if (strcmp(strProp, "customcmd1label") == 0 || strcmp(strProp, "customcommand1label") == 0)
-          g_string_assign(con->customCmd1Label, strVal);
-
-        // * custom command 1 *
-        if (strcmp(strProp, "customcmd1") == 0 || strcmp(strProp, "customcommand1") == 0)
-          g_string_assign(con->customCmd1, strVal);
-
-        // * custom command 2 enabled *
-        if (strcmp(strProp, "customcmd2enabled") == 0 || strcmp(strProp, "customcommand2enabled") == 0)
-          con->customCmd2Enabled = svStringToBool(strVal);
-
-        // * custom command 2 label *
-        if (strcmp(strProp, "customcmd2label") == 0 || strcmp(strProp, "customcommand2label") == 0)
-          g_string_assign(con->customCmd2Label, strVal);
-
-        // * custom command 2 *
-        if (strcmp(strProp, "customcmd2") == 0 || strcmp(strProp, "customcommand2") == 0)
-          g_string_assign(con->customCmd2, strVal);
-
-        // * custom command 3 enabled *
-        if (strcmp(strProp, "customcmd3enabled") == 0 || strcmp(strProp, "customcommand3enabled") == 0)
-          con->customCmd3Enabled = svStringToBool(strVal);
-
-        // * custom command 3 label *
-        if (strcmp(strProp, "customcmd3label") == 0 || strcmp(strProp, "customcommand3label") == 0)
-          g_string_assign(con->customCmd3Label, strVal);
-
-        // * custom command 3 *
-        if (strcmp(strProp, "customcmd3") == 0 || strcmp(strProp, "customcommand3") == 0)
-          g_string_assign(con->customCmd3, strVal);
-
-        // * last connect time *
-        if (strcmp(strProp, "lastconnecttime") == 0)
-          g_string_assign(con->lastConnectTime, strVal);
+        app->addNewConnection = false;
       }
+
+      // create new con object
+      con = g_new0(Connection, 1);
+      svInitConnObject(con);
+
+      // connection name
+      g_string_assign(con->name, strVal->str);
     }
-    else
+
+    // * connGroup *
+    if (strcmp(strProp->str, "group") == 0)
     {
-      strLine[intPos] = charIn;
-      intPos ++;
+      // add a separator if it's a new group
+      if (strcmp(strVal->str, strLastGroup->str) != 0)
+        svInsertHostListRow("", -1, NULL);
+
+      g_string_assign(con->group, strVal->str);
+      g_string_assign(strLastGroup, strVal->str);
     }
+
+    // * address *
+    if (strcmp(strProp->str, "address") == 0 || strcmp(strProp->str, "hostaddress") == 0)
+      g_string_assign(con->address, strVal->str);
+
+    // * type *
+    if (strcmp(strProp->str, "type") == 0)
+    {
+      if (strcmp(strVal->str, "0") == 0 || strcmp(strVal->str, "v") == 0)
+        con->type = SV_TYPE_VNC;
+      else if (strcmp(strVal->str, "1") == 0 || strcmp(strVal->str, "s") == 0)
+        con->type = SV_TYPE_VNC_OVER_SSH;
+      else
+        con->type = SV_TYPE_VNC;
+    }
+
+    // * vncPort *
+    if (strcmp(strProp->str, "vncport") == 0)
+      g_string_assign(con->vncPort, strVal->str);
+
+    // * vncPass *
+    if (strcmp(strProp->str, "vncpass") == 0)
+      g_string_assign(con->vncPass, strVal->str);
+
+    // * vncLoginUser *
+    if (strcmp(strProp->str, "vncloginuser") == 0)
+      g_string_assign(con->vncLoginUser, strVal->str);
+
+    // * vncLoginPass *
+    if (strcmp(strProp->str, "vncloginpass") == 0)
+      g_string_assign(con->vncLoginPass, strVal->str);
+
+    // * scaling *
+    if (strcmp(strProp->str, "scale") == 0)
+      con->scale = svStringToBool(strVal->str);
+
+    // * showRemoteCursor *
+    if (strcmp(strProp->str, "showremotecursor") == 0)
+      con->showRemoteCursor = svStringToBool(strVal->str);
+
+    // * imageQuality *
+    if (strcmp(strProp->str, "quality") == 0)
+    {
+      if (strcmp(strVal->str, "0") == 0)
+        con->quality = SV_QUAL_LOW;
+      else if (strcmp(strVal->str, "1") == 0 || strcmp(strVal->str, "5") == 0)
+        con->quality = SV_QUAL_MEDIUM;
+      else if (strcmp(strVal->str, "2") == 0 || strcmp(strVal->str, "9") == 0)
+        con->quality = SV_QUAL_FULL;
+      else
+        con->quality = SV_QUAL_DEFAULT;
+    }
+
+    // * lossy encoding *
+    if (strcmp(strProp->str, "lossyencoding") == 0)
+      con->lossyEncoding = svStringToBool(strVal->str);
+
+    // * sshPort *
+    if (strcmp(strProp->str, "sshport") == 0)
+      g_string_assign(con->sshPort, strVal->str);
+
+    // * sshPrivKeyfile *
+    if (strcmp(strProp->str, "sshkeyprivate") == 0)
+      g_string_assign(con->sshPrivKeyfile, strVal->str);
+
+    // * sshUser *
+    if (strcmp(strProp->str, "sshuser") == 0)
+      g_string_assign(con->sshUser, strVal->str);
+
+    // * f12Macro *
+    if (strcmp(strProp->str, "f12macro") == 0)
+      g_string_assign(con->f12Macro, strVal->str);
+
+    // * quicknote *
+    if (strcmp(strProp->str, "quicknote") == 0)
+      g_string_assign(con->quickNote, strVal->str);
+
+    // * custom command 1 enabled *
+    if (strcmp(strProp->str, "customcmd1enabled") == 0 || strcmp(strProp->str, "customcommand1enabled") == 0)
+      con->customCmd1Enabled = svStringToBool(strVal->str);
+
+    // * custom command 1 label *
+    if (strcmp(strProp->str, "customcmd1label") == 0 || strcmp(strProp->str, "customcommand1label") == 0)
+      g_string_assign(con->customCmd1Label, strVal->str);
+
+    // * custom command 1 *
+    if (strcmp(strProp->str, "customcmd1") == 0 || strcmp(strProp->str, "customcommand1") == 0)
+      g_string_assign(con->customCmd1, strVal->str);
+
+    // * custom command 2 enabled *
+    if (strcmp(strProp->str, "customcmd2enabled") == 0 || strcmp(strProp->str, "customcommand2enabled") == 0)
+      con->customCmd2Enabled = svStringToBool(strVal->str);
+
+    // * custom command 2 label *
+    if (strcmp(strProp->str, "customcmd2label") == 0 || strcmp(strProp->str, "customcommand2label") == 0)
+      g_string_assign(con->customCmd2Label, strVal->str);
+
+    // * custom command 2 *
+    if (strcmp(strProp->str, "customcmd2") == 0 || strcmp(strProp->str, "customcommand2") == 0)
+      g_string_assign(con->customCmd2, strVal->str);
+
+    // * custom command 3 enabled *
+    if (strcmp(strProp->str, "customcmd3enabled") == 0 || strcmp(strProp->str, "customcommand3enabled") == 0)
+      con->customCmd3Enabled = svStringToBool(strVal->str);
+
+    // * custom command 3 label *
+    if (strcmp(strProp->str, "customcmd3label") == 0 || strcmp(strProp->str, "customcommand3label") == 0)
+      g_string_assign(con->customCmd3Label, strVal->str);
+
+    // * custom command 3 *
+    if (strcmp(strProp->str, "customcmd3") == 0 || strcmp(strProp->str, "customcommand3") == 0)
+      g_string_assign(con->customCmd3, strVal->str);
+
+    // * last connect time *
+    if (strcmp(strProp->str, "lastconnecttime") == 0)
+      g_string_assign(con->lastConnectTime, strVal->str);
+
+    // free up gstrings
+    g_string_free(strProp, true);
+    g_string_free(strVal, true);
   }
 
-  // add last con item, if not null
-  if (con != NULL && strcmp(con->name->str, "") != 0)
-  {
-    // add connection to app->connections list
-    app->connections = g_list_append(app->connections, con);
+  // free up stuffz
+  g_string_free(strLastGroup, true);
+  g_strfreev(lines);
 
-    svInsertHostListRow(con->name->str, -1);
+  // add last con item, if not null
+  if (con && con->name->len > 0)
+  {
+    svInsertHostListRow(con->name->str, -1, con);
 
     app->addNewConnection = false;
   }
+  else
+    svFreeConnObject(con);
 
-  // free strIn
-  g_free(strIn);
-
-  svInsertHostListRow("", -1);
+  svInsertHostListRow("", -1, NULL);
 
   // set or unset hostlist item tooltips
   svSetHostlistItemsTooltips();
@@ -2306,7 +2258,8 @@ void svConfigRead ()
 /* write the configuration file */
 void svConfigWrite ()
 {
-  if (svConfigCreateNew(false) == false)
+  //return;  // <<<---############################################ REMOVE@!!!!!!!! ##################################
+  if (!svConfigCreateNew(false))
   {
     svLog("svConfigWrite - Could not create new config dirs or file", false);
     return;
@@ -2316,7 +2269,7 @@ void svConfigWrite ()
 
   // header
   g_string_append(outStr, "# SpiritVNC - GTK 3 version\n");
-  g_string_append(outStr, "# 2022-2025 Will Brokenbourgh - to God be the glory!\n#\n");
+  g_string_append(outStr, "# 2022-2026 Will Brokenbourgh - to God be the glory!\n#\n");
 
   // config version
   g_string_append(outStr, "configver=1.0\n");
@@ -2354,14 +2307,17 @@ void svConfigWrite ()
   g_string_append(outStr, "\n");
 
   // --- per-connection settings ---
-  Connection * con = NULL;
+  // go through connection list and add each connection's settings
+  GList * rows = gtk_container_get_children(GTK_CONTAINER(app->serverList));
 
-  // go through connection glist and add each connection's settings
-  for (GList * l = app->connections; l != NULL; l = l->next)
+  for (GList * l = rows; l; l = l->next)
   {
-    con = (Connection *)l->data;
+    GtkListBoxRow * row = l->data;
+    GtkWidget * box = gtk_bin_get_child(GTK_BIN(row));
 
-    if (con == NULL || con->name->len == 0 || con->type == SV_TYPE_VNC_REVERSE)
+    Connection * con = g_object_get_data(G_OBJECT(box), "con");
+
+    if (!con || con->name->len == 0 || con->type == SV_TYPE_VNC_REVERSE)
       continue;
 
     g_string_append_printf(outStr, "host=%s\n", con->name->str);
@@ -2400,28 +2356,11 @@ void svConfigWrite ()
   g_string_append(outStr, "\n");
 
   // --- attempt to write config file out ---
-  if (g_file_set_contents(app->appConfigFile->str, outStr->str, -1, NULL) == false)
+  if (!g_file_set_contents(app->appConfigFile->str, outStr->str, -1, NULL))
     svLog("svConfigWrite - Error: SpiritVNC could not write config file", false);
-}
 
-
-/* return a connection object based on connection name */
-Connection * svConnectionFromName (const char * text)
-{
-  Connection * con = NULL;
-
-  // go through connections glist and return correct connection
-  for (GList * l = app->connections; l != NULL; l = l->next)
-  {
-    con = (Connection *)l->data;
-
-    // if connection isn't null and matches the connection
-    // name, return con object
-    if (con != NULL && strcmp(text, con->name->str) == 0)
-      return con;
-  }
-
-  return NULL;
+  g_list_free(rows);
+  g_string_free(outStr, true);
 }
 
 
@@ -2436,27 +2375,28 @@ void svSetIconFromConnectionName (const char * text, unsigned int state)
     GtkWidget * row = GTK_WIDGET(l->data);
 
     // get box that holds status image and label
-    GtkWidget * childBox = gtk_bin_get_child(GTK_BIN(row));
-
-    if (childBox == NULL)
+    GtkWidget * rowBox = gtk_bin_get_child(GTK_BIN(row));
+    if (!rowBox)
       continue;
 
     // get box's children
-    GList * boxChildren = gtk_container_get_children(GTK_CONTAINER(childBox));
+    GList * boxChildren = gtk_container_get_children(GTK_CONTAINER(rowBox));
 
-    GtkWidget * img = g_list_nth_data(boxChildren, 0);
-    GtkWidget * label = g_list_nth_data(boxChildren, 1);
+    GtkWidget * img = (GtkWidget *)g_list_nth_data(boxChildren, 0);
+    GtkWidget * label = (GtkWidget *)g_list_nth_data(boxChildren, 1);
+
+    g_list_free(boxChildren);
 
     // get label's text, if any
-    char * lText = (char *)gtk_label_get_text(GTK_LABEL(label));
+    const char * lText = gtk_label_get_text(GTK_LABEL(label));
 
-    if (lText == NULL)
+    if (!lText)
       continue;
 
     // if the label text matches, modify the icon
     if (strcmp(lText, text) == 0)
     {
-      if (img != NULL)
+      if (img)
       {
         gtk_image_clear(GTK_IMAGE(img));
 
@@ -2466,27 +2406,27 @@ void svSetIconFromConnectionName (const char * text, unsigned int state)
         switch (state)
         {
           case SV_STATE_DISCONNECTED:
-            pb = gdk_pixbuf_new_from_xpm_data((const char **)xpmDisconnected);
+            pb = gdk_pixbuf_new_from_resource("/com/spiritvnc/pngs/disconnected.png", NULL);
             break;
 
           case SV_STATE_CONNECTED:
-            pb = gdk_pixbuf_new_from_xpm_data((const char **)xpmConnected);
+            pb = gdk_pixbuf_new_from_resource("/com/spiritvnc/pngs/connected.png", NULL);
             break;
 
           case SV_STATE_WAITING:
-            pb = gdk_pixbuf_new_from_xpm_data((const char **)xpmWait);
+            pb = gdk_pixbuf_new_from_resource("/com/spiritvnc/pngs/connecting.png", NULL);
             break;
 
           case SV_STATE_TIMEOUT:
-            pb = gdk_pixbuf_new_from_xpm_data((const char **)xpmTimeout);
+            pb = gdk_pixbuf_new_from_resource("/com/spiritvnc/pngs/noconnect.png", NULL);
             break;
 
           case SV_STATE_ERROR:
-            pb = gdk_pixbuf_new_from_xpm_data((const char **)xpmError);
+            pb = gdk_pixbuf_new_from_resource("/com/spiritvnc/pngs/disconnected_error.png", NULL);
             break;
 
           default:
-            pb = gdk_pixbuf_new_from_xpm_data((const char **)xpmBlank);
+            pb = gdk_pixbuf_new_from_resource("/com/spiritvnc/pngs/blank.png", NULL);
         }
 
         // set the icon
@@ -2497,13 +2437,15 @@ void svSetIconFromConnectionName (const char * text, unsigned int state)
       return;
     }
   }
+
+  g_list_free(rows);
 }
 
 
 /* sets a connection's text in the connection list */
 void svSetTextFromConnectionName (const char * currentText, const char * newText)
 {
-  if (currentText == NULL || newText == NULL)
+  if (!currentText || !newText)
     return;
 
   GList * rows = gtk_container_get_children(GTK_CONTAINER(app->serverList));
@@ -2514,48 +2456,56 @@ void svSetTextFromConnectionName (const char * currentText, const char * newText
     GtkWidget * row = GTK_WIDGET(l->data);
 
     // get box that holds status image and label
-    GtkWidget * childBox = gtk_bin_get_child(GTK_BIN(row));
+    GtkWidget * rowBox = gtk_bin_get_child(GTK_BIN(row));
 
-    if (childBox == NULL)
+    if (!rowBox)
       continue;
 
     // get box's children
-    GList * boxChildren = gtk_container_get_children(GTK_CONTAINER(childBox));
+    GList * boxChildren = gtk_container_get_children(GTK_CONTAINER(rowBox));
 
-    GtkWidget * label = g_list_nth_data(boxChildren, 1);
+    GtkWidget * label = (GtkWidget *)g_list_nth_data(boxChildren, 1);
+
+    g_list_free(boxChildren);
 
     // get label's text, if any
-    char * lText = (char *)gtk_label_get_text(GTK_LABEL(label));
+    const char * lText = gtk_label_get_text(GTK_LABEL(label));
 
-    if (lText == NULL)
+    if (!lText)
       continue;
 
     // if the label text matches, change to new text
     if (strcmp(lText, currentText) == 0)
     {
-      if (label != NULL)
+      if (label)
         gtk_label_set_label(GTK_LABEL(label), newText);
 
       return;
     }
   }
+
+  g_list_free(rows);
 }
 
 
 /* closes all connections (typically when exiting program) */
 void svEndAllConnections ()
 {
-  // end all viewers first
-  Connection * con = NULL;
+  // end all viewers
+  GList * rows = gtk_container_get_children(GTK_CONTAINER(app->serverList));
 
-  // go through connection glist and return correct connection
-  for (GList * l = app->connections; l != NULL; l = l->next)
+  for (GList * l = rows; l; l = l->next)
   {
-    con = (Connection *)l->data;
+    GtkListBoxRow * row = l->data;
+    GtkWidget * box = gtk_bin_get_child(GTK_BIN(row));
 
-    if (con != NULL && con->state == SV_STATE_CONNECTED && con->vncObj != NULL)
+    Connection * con = g_object_get_data(G_OBJECT(box), "con");
+
+    if (con && con->state == SV_STATE_CONNECTED && con->vncObj)
       vnc_display_close(VNC_DISPLAY(con->vncObj));
   }
+
+  g_list_free(rows);
 }
 
 
@@ -2625,18 +2575,18 @@ gboolean svHandleConnectionListClicks (GtkWidget * widget, GdkEvent * event, voi
   unsigned int button = 0;
 
   // set last button number
-  if (gdk_event_get_button(event, &button) == false)
+  if (!gdk_event_get_button(event, &button))
     return false;
 
   // set last click count
-  if (gdk_event_get_click_count(event, &clickCount) == false)
+  if (!gdk_event_get_click_count(event, &clickCount))
     return false;
 
   double x = 0;
   double y = 0;
 
   // get the row's internal name from the mouse's y position
-  if (gdk_event_get_coords(event, &x, &y) == false)
+  if (!gdk_event_get_coords(event, &x, &y))
     return false;
 
   // hide any active display if list is single-clicked
@@ -2644,35 +2594,28 @@ gboolean svHandleConnectionListClicks (GtkWidget * widget, GdkEvent * event, voi
   {
     GtkWidget * currentDisplay = gtk_stack_get_visible_child(GTK_STACK(app->displayStack));
 
-    if (currentDisplay != NULL)
+    if (currentDisplay)
       gtk_widget_hide(currentDisplay);
   }
 
   // get the clicked row
   GtkListBoxRow * row = gtk_list_box_get_row_at_y(GTK_LIST_BOX(widget), y);
-
-  if (row == NULL)
+  if (!row)
+  {
+    //printf("DEBUG: row is null in svHandleConnectionListClicks\n");
     return false;
+  }
 
   // get box that holds status image and label
-  GtkWidget * childBox = gtk_bin_get_child(GTK_BIN(row));
-
-  if (childBox == NULL)
+  GtkWidget * rowBox = gtk_bin_get_child(GTK_BIN(row));
+  if (!rowBox)
     return false;
 
-  // get box's children
-  GList * boxChildren = gtk_container_get_children(GTK_CONTAINER(childBox));
-
-  GtkWidget * label = g_list_nth_data(boxChildren, 1);
-
-  if (label == NULL)
-    return false;
-
-  // get label's text, if any
-  const char * lText = gtk_label_get_text(GTK_LABEL(label));
-
-  // get the matching connection from the label's text
-  Connection * con = svConnectionFromName(lText);
+  // get connection from attached rowBox data
+  //Connection * con = svConnectionFromName(lText);
+  Connection * con = g_object_get_data(G_OBJECT(rowBox), "con");
+  //if (!con)
+    //printf("DEBUG: con is null in svHandleConnectionListClicks\n");
 
   // **### DON'T check con for null here!! ###**
 
@@ -2696,34 +2639,19 @@ gboolean svHandleConnectionListClicks (GtkWidget * widget, GdkEvent * event, voi
 }
 
 
-/* return the int index of the currently-selected connection listbox item */
-int svGetSelectedConnectionListItemIndex ()
-{
-  // figure out which connection is selected
-  GtkListBoxRow * selectedRow = gtk_list_box_get_selected_row(GTK_LIST_BOX(app->serverList));
-
-  if (selectedRow == NULL)
-    return -1;
-
-  // get the connection's index
-  return gtk_list_box_row_get_index(selectedRow);
-}
-
-
 /* return the Connection * of the currently-selected connection listbox item */
 Connection * svGetSelectedConnectionListConnection ()
 {
-  // get the connection's index
-  int idx = svGetSelectedConnectionListItemIndex();
-
-  if (idx < 0)
+  // figure out which connection is selected
+  GtkListBoxRow * selectedRow = gtk_list_box_get_selected_row(GTK_LIST_BOX(app->serverList));
+  if (!selectedRow)
     return NULL;
 
-  // get the connections glist item for this index
-  Connection * con = NULL;
-  con = (Connection *)g_list_nth_data(app->connections, idx);
+  GtkWidget * rowBox = gtk_bin_get_child(GTK_BIN(selectedRow));
+  if (!rowBox)
+    return NULL;
 
-  return con;
+  return (Connection *)g_object_get_data(G_OBJECT(rowBox), "con");
 }
 
 
@@ -2733,7 +2661,7 @@ void svHandleRequestUpdateMenuItem (GtkMenuItem * gMenuItem, gpointer userData)
   // get the connections glist item for this index
   Connection * con = svGetSelectedConnectionListConnection();
 
-  if (con == NULL || strcmp(con->name->str, "") == 0)
+  if (!con || con->name->len == 0)
     return;
 
   vnc_display_request_update(VNC_DISPLAY(con->vncObj));
@@ -2746,12 +2674,16 @@ void svHandleSendCADMenuItem (GtkMenuItem * gMenuItem, gpointer userData)
   // get the connections glist item for this index
   Connection * con = svGetSelectedConnectionListConnection();
 
-  if (con == NULL || strcmp(con->name->str, "") == 0)
+  if (!con || con->name->len == 0)
     return;
 
-  guint keys[] = { GDK_KEY_Control_L, GDK_KEY_Alt_L, GDK_KEY_Delete };
+  guint keys[] = {
+    GDK_KEY_Control_L,
+    GDK_KEY_Alt_L,
+    GDK_KEY_Delete
+  };
 
-  vnc_display_send_keys(VNC_DISPLAY(con->vncObj), keys, sizeof(keys)/sizeof(keys[0]));
+  vnc_display_send_keys(VNC_DISPLAY(con->vncObj), keys, sizeof(keys) / sizeof(keys[0]));
 }
 
 
@@ -2761,32 +2693,34 @@ void svHandleSendCSEMenuItem (GtkMenuItem * gMenuItem, gpointer userData)
   // get the connections glist item for this index
   Connection * con = svGetSelectedConnectionListConnection();
 
-  if (con == NULL || strcmp(con->name->str, "") == 0)
+  if (!con || con->name->len == 0)
     return;
 
-  guint keys[] = { GDK_KEY_Control_L, GDK_KEY_Shift_L, GDK_KEY_Escape };
+  guint keys[] = {
+    GDK_KEY_Control_L,
+    GDK_KEY_Shift_L,
+    GDK_KEY_Escape
+  };
 
-  vnc_display_send_keys(VNC_DISPLAY(con->vncObj), keys, sizeof(keys)/sizeof(keys[0]));
+  vnc_display_send_keys(VNC_DISPLAY(con->vncObj), keys, sizeof(keys) / sizeof(keys[0]));
 }
 
 
 /* menu item handler - shows 'send keys' window */
 void svHandleSendEnteredKeystrokesMenuItem (GtkMenuItem * gMenuItem, gpointer userData)
 {
-  SendKeysObj * obj = malloc(sizeof(SendKeysObj));
-
-  if (obj == NULL)
+  SendKeysObj * obj = g_new0(SendKeysObj, 1);
+  if (!obj)
     return;
 
   // get the connections glist item for this index
   Connection * con = svGetSelectedConnectionListConnection();
-
-  if (con == NULL || strcmp(con->name->str, "") == 0)
+  if (!con || con->name->len == 0)
     return;
 
   // compose title string
-  char titleStr[FILENAME_MAX] = {0};
-  snprintf(titleStr, FILENAME_MAX, "Send keys to '%s' - SpiritVNC", con->name->str);
+  GString * titleStr = g_string_new(NULL);
+  g_string_printf(titleStr, "Send keys to '%s' - SpiritVNC", con->name->str);
 
   // create output window
   GtkWidget * sendKeysWin = gtk_window_new(GTK_WINDOW_TOPLEVEL);
@@ -2795,9 +2729,10 @@ void svHandleSendEnteredKeystrokesMenuItem (GtkMenuItem * gMenuItem, gpointer us
   gtk_window_set_position(GTK_WINDOW(sendKeysWin), GTK_WIN_POS_CENTER_ON_PARENT);
 
   // set window title
-  gtk_window_set_title(GTK_WINDOW(sendKeysWin), titleStr);
+  gtk_window_set_title(GTK_WINDOW(sendKeysWin), titleStr->str);
   gtk_window_set_modal(GTK_WINDOW(sendKeysWin), true);
   gtk_window_set_resizable(GTK_WINDOW(sendKeysWin), false);
+  g_string_free(titleStr, true);
 
   // parent box
   GtkWidget * boxParent = gtk_box_new(GTK_ORIENTATION_VERTICAL, 7);
@@ -2868,15 +2803,14 @@ void svHandleSendEnteredKeystrokesMenuItem (GtkMenuItem * gMenuItem, gpointer us
 void svHandleCustomCommandMenuItem (GtkMenuItem * gMenuItem, gpointer userData)
 {
   const char * cmd = (const char *)userData;
-
-  if (cmd == NULL)
+  if (!cmd)
     return;
 
   GError * gError = NULL;
   char * stdOut = NULL;
 
   // run the command synchronous, will block
-  if (g_spawn_command_line_sync(cmd, &stdOut, NULL, NULL, &gError) == false)
+  if (!g_spawn_command_line_sync(cmd, &stdOut, NULL, NULL, &gError))
   {
     GtkWidget * dialog = gtk_message_dialog_new_with_markup(GTK_WINDOW(app->mainWin),
                                       GTK_DIALOG_DESTROY_WITH_PARENT,
@@ -2886,11 +2820,18 @@ void svHandleCustomCommandMenuItem (GtkMenuItem * gMenuItem, gpointer userData)
                                       gError->message);
      gtk_dialog_run(GTK_DIALOG(dialog));
      gtk_widget_destroy(dialog);
+
+      printf("DEBUG: svHandleCustomCommandMenuItem - readError pointer = %p\n", (void*)gError);
+
+      if (gError)
+        g_error_free(gError);
+
+     return;
   }
   else
   {
     // show command output if not null or empty
-    if (stdOut != NULL && strcmp(stdOut, "") != 0)
+    if (stdOut && strcmp(stdOut, "") != 0)
     {
       // create output window
       GtkWidget * outWin = gtk_window_new(GTK_WINDOW_TOPLEVEL);
@@ -2924,6 +2865,7 @@ void svHandleCustomCommandMenuItem (GtkMenuItem * gMenuItem, gpointer userData)
       GString * cmdString = g_string_new(NULL);
       g_string_printf(cmdString, "Command: '%s'", cmd);
       gtk_label_set_text(GTK_LABEL(lblCmd), cmdString->str);
+      g_string_free(cmdString, true);
       gtk_grid_attach(GTK_GRID(grid), lblCmd, 1, 2, 1, 1);
 
       // scroller for textview
@@ -2959,10 +2901,10 @@ void svHandleCustomCommandMenuItem (GtkMenuItem * gMenuItem, gpointer userData)
       // show everything
       gtk_widget_show_all(outWin);
     }
-  }
 
-  if (gError != NULL)
-    g_error_free(gError);
+    if (stdOut)
+      g_free(stdOut);
+  }
 }
 
 
@@ -2970,8 +2912,7 @@ void svHandleCustomCommandMenuItem (GtkMenuItem * gMenuItem, gpointer userData)
 void svHandleConnectMenuItem (GtkMenuItem * gMenuItem, gpointer userData)
 {
   Connection * con = (Connection *)userData;
-
-  if (con == NULL)
+  if (!con)
     return;
 
   svConnectionCreate(con);
@@ -2982,8 +2923,7 @@ void svHandleConnectMenuItem (GtkMenuItem * gMenuItem, gpointer userData)
 void svHandleDisconnectMenuItem (GtkMenuItem * gMenuItem, gpointer userData)
 {
   Connection * con = (Connection *)userData;
-
-  if (con == NULL)
+  if (!con)
     return;
 
   svConnectionEnd(con);
@@ -2994,8 +2934,7 @@ void svHandleDisconnectMenuItem (GtkMenuItem * gMenuItem, gpointer userData)
 void svHandleEditMenuItem (GtkMenuItem * gMenuItem, gpointer userData)
 {
   Connection * con = (Connection *)userData;
-
-  if (con == NULL)
+  if (!con)
     return;
 
   svShowConnectionEditWindow(con);
@@ -3005,12 +2944,14 @@ void svHandleEditMenuItem (GtkMenuItem * gMenuItem, gpointer userData)
 void svHandleSyncClipboardMenuItem (GtkMenuItem * gMenuItem, gpointer userData)
 {
   Connection * con = (Connection *)userData;
-
-  if (con == NULL || con->clipboard == NULL || con->clipboard->len < 1)
+  if (!con || !con->clipboard || con->clipboard->len < 1)
     return;
 
   // set local keyboard
   GtkClipboard * cb = gtk_clipboard_get(GDK_SELECTION_CLIPBOARD);
+  if (!cb)
+    return;
+
   gtk_clipboard_set_text(cb, con->clipboard->str, -1);
 }
 
@@ -3020,7 +2961,7 @@ void svHandleCopyF12MacroMenuItem (GtkMenuItem * gMenuItem, gpointer userData)
 {
   Connection * con = (Connection *)userData;
 
-  if (con == NULL)
+  if (!con)
     return;
 
   g_string_assign(app->f12Storage, con->f12Macro->str);
@@ -3032,8 +2973,63 @@ void svHandlePasteF12MacroMenuItem (GtkMenuItem * gMenuItem, gpointer userData)
 {
   //Connection * con = (Connection *)userData;
 
-  //if (con == NULL)
+  //if (!con)
     //return;
+}
+
+
+/* clean up connection object if deleted */
+void svFreeConnObject(Connection * con)
+{
+  if (!con)
+    return;
+
+  if (con->name)
+    g_string_free(con->name, true);
+  if (con->group)
+    g_string_free(con->group, true);
+  if (con->address)
+    g_string_free(con->address, true);
+  if (con->vncPort)
+    g_string_free(con->vncPort, true);
+  if (con->vncPass)
+    g_string_free(con->vncPass, true);
+  if (con->vncLoginUser)
+    g_string_free(con->vncLoginUser, true);
+  if (con->vncLoginPass)
+    g_string_free(con->vncLoginPass, true);
+  if (con->sshPort)
+    g_string_free(con->sshPort, true);
+  if (con->sshPrivKeyfile)
+    g_string_free(con->sshPrivKeyfile, true);
+  if (con->sshUser)
+    g_string_free(con->sshUser, true);
+  if (con->sshPass)
+    g_string_free(con->sshPass, true);
+  if (con->f12Macro)
+    g_string_free(con->f12Macro, true);
+  if (con->quickNote)
+    g_string_free(con->quickNote, true);
+  if (con->customCmd1Label)
+    g_string_free(con->customCmd1Label, true);
+  if (con->customCmd1)
+    g_string_free(con->customCmd1, true);
+  if (con->customCmd2Label)
+    g_string_free(con->customCmd2Label, true);
+  if (con->customCmd2)
+    g_string_free(con->customCmd2, true);
+  if (con->customCmd3Label)
+    g_string_free(con->customCmd3Label, true);
+  if (con->customCmd3)
+    g_string_free(con->customCmd3, true);
+  if (con->lastErrorMessage)
+    g_string_free(con->lastErrorMessage, true);
+  if (con->lastConnectTime)
+    g_string_free(con->lastConnectTime, true);
+  if (con->clipboard)
+    g_string_free(con->clipboard, true);
+
+  g_free(con);
 }
 
 
@@ -3042,7 +3038,7 @@ void svHandleDeleteMenuItem (GtkMenuItem * gMenuItem, gpointer userData)
 {
   Connection * con = (Connection *)userData;
 
-  if (con == NULL)
+  if (!con)
     return;
 
   int res = -1;
@@ -3063,21 +3059,6 @@ void svHandleDeleteMenuItem (GtkMenuItem * gMenuItem, gpointer userData)
 
   if (res == GTK_RESPONSE_YES || con->type == SV_TYPE_VNC_REVERSE)
   {
-    Connection * conTemp = NULL;
-
-    // go through connection glist and remove connection
-    for (GList * l = app->connections; l != NULL; l = l->next)
-    {
-      conTemp = (Connection *)l->data;
-
-      // found matching connection in connections glist
-      if (conTemp != NULL && conTemp == con)
-      {
-        app->connections = g_list_remove_all(app->connections, con);
-        break;
-      }
-    }
-
     // get all connection listbox rows
     GList * rows = gtk_container_get_children(GTK_CONTAINER(app->serverList));
 
@@ -3087,17 +3068,19 @@ void svHandleDeleteMenuItem (GtkMenuItem * gMenuItem, gpointer userData)
       GtkWidget * row = GTK_WIDGET(l->data);
 
       // get box that holds status image and label
-      GtkWidget * childBox = gtk_bin_get_child(GTK_BIN(row));
+      GtkWidget * rowBox = gtk_bin_get_child(GTK_BIN(row));
 
-      if (childBox == NULL)
+      if (!rowBox)
         continue;
 
       // get box's children
-      GList * boxChildren = gtk_container_get_children(GTK_CONTAINER(childBox));
+      GList * boxChildren = gtk_container_get_children(GTK_CONTAINER(rowBox));
 
-      GtkWidget * label = g_list_nth_data(boxChildren, 1);
+      GtkWidget * label = (GtkWidget *)g_list_nth_data(boxChildren, 1);
 
-      if (label != NULL && GTK_IS_LABEL(label))
+      g_list_free(boxChildren);
+
+      if (label && GTK_IS_LABEL(label))
       {
         const char * text = gtk_label_get_text(GTK_LABEL(label));
 
@@ -3105,11 +3088,14 @@ void svHandleDeleteMenuItem (GtkMenuItem * gMenuItem, gpointer userData)
         if (strcmp(text, con->name->str) == 0)
         {
           // destroy the child widget (will remove from container too)
-          if (row != NULL)
+          if (row)
             gtk_widget_destroy(row);
 
-          // release connection resources
-          g_free(con);
+          // release and clean up connection resources
+          if (app->selectedConnection == con)
+            app->selectedConnection = NULL;
+
+          svFreeConnObject(con);
 
           break;
         }
@@ -3135,8 +3121,7 @@ void svHandleAddNewConnectionMenuItem ()
 void svHandleScreenshotMenuItem ()
 {
   Connection * con = svGetSelectedConnectionListConnection();
-
-  if (con == NULL)
+  if (!con)
     return;
 
   // save screenshot to pixbuf
@@ -3149,15 +3134,15 @@ void svHandleScreenshotMenuItem ()
   int res;
   char existingFilename[FILENAME_MAX] = {0};
 
-  // Get the current time
+  // get the current time
   GDateTime * now = g_date_time_new_now_local();
 
-  // Format the time as a human-readable string
-  char * formattedTime = g_date_time_format(now, "%Y-%m-%d--%H-%M-%S");
+  // format the time as a human-readable string
+  char * formattedTime = g_date_time_format(now, "%Y-%m-%d--%H-%M-%S");  // <<<--- do NOT make const char *
 
   snprintf(existingFilename, 60, "spiritvnc-screenshot-%s.png", formattedTime);
 
-  // Free resources
+  // free resources
   g_free(formattedTime);
   g_date_time_unref(now);
 
@@ -3171,14 +3156,14 @@ void svHandleScreenshotMenuItem ()
                                         NULL);
   chooser = GTK_FILE_CHOOSER(dialog);
 
-  gtk_file_chooser_set_do_overwrite_confirmation(chooser, TRUE);
+  gtk_file_chooser_set_do_overwrite_confirmation(chooser, true);
   gtk_file_chooser_set_current_name(chooser, existingFilename);
 
   res = gtk_dialog_run(GTK_DIALOG(dialog));
 
   if (res == GTK_RESPONSE_ACCEPT)
   {
-    char * filename = gtk_file_chooser_get_filename(chooser);
+    char * filename = gtk_file_chooser_get_filename(chooser);  //  <<<--- do NOT make const char *
 
     gdk_pixbuf_save(pic, filename, "png", NULL, "tEXt::Generator App", "spiritvncgtk", NULL);
 
@@ -3194,7 +3179,7 @@ void svHandleScreenshotMenuItem ()
 /* create connection right-click menu */
 void svConnectionRightClick (Connection * con)
 {
-  if (con == NULL)
+  if (!con)
     return;
 
   // right-click menu
@@ -3258,12 +3243,12 @@ void svConnectionRightClick (Connection * con)
   gtk_menu_shell_append(GTK_MENU_SHELL(rightMenu), delete);
   g_signal_connect(delete, "activate", G_CALLBACK(svHandleDeleteMenuItem), con);
 
-  bool enableCustomCommands = false;
+  gboolean enableCustomCommands = false;
 
   // only display custom commands submenu if any subcommands are enabled and have a label
-  if ((con->customCmd1Enabled == true && strcmp(con->customCmd1Label->str, "") != 0) ||
-    (con->customCmd2Enabled == true && strcmp(con->customCmd2Label->str, "") != 0) ||
-    (con->customCmd3Enabled == true && strcmp(con->customCmd3Label->str, "") != 0))
+  if ((con->customCmd1Enabled && con->customCmd1Label->len > 0) ||
+    (con->customCmd2Enabled && con->customCmd2Label->len > 0) ||
+    (con->customCmd3Enabled && con->customCmd3Label->len > 0))
   {
     enableCustomCommands = true;
   }
@@ -3346,7 +3331,7 @@ gpointer svConnectionInitWaiter (void * data)
 {
   Connection * con = (Connection *)data;
 
-  if (con == NULL)
+  if (!con)
     return NULL;
 
   // wait for vnc connection timeout
@@ -3362,7 +3347,7 @@ gpointer svConnectionInitWaiter (void * data)
   // if the connection isn't actually initialized (fully connected), close it
   if (con->state != SV_STATE_CONNECTED)
   {
-    if (con->vncObj != NULL)
+    if (con->vncObj)
       vnc_display_close(VNC_DISPLAY(con->vncObj));
 
     // call server error handler directly
@@ -3378,14 +3363,14 @@ void svServerConnected (GtkWidget * vncObj)
 {
   Connection * con = svConnectionFromVNCObj(vncObj);
 
-  if (con == NULL)
+  if (!con)
     return;
 
   // log
-  char logStr[FILENAME_MAX] = {0};
-  snprintf(logStr, FILENAME_MAX - 1, "Server connected (but not init'd) to '%s - %s'",
-    con->name->str, con->address->str);
-  svLog(logStr, true);
+  GString * logStr = g_string_new(NULL);
+  g_string_printf(logStr, "Server connected (but not init'd) to '%s - %s'", con->name->str, con->address->str);
+  svLog(logStr->str, true);
+  g_string_free(logStr, true);
 
   // spawn initialize waiter thread
   GThread * initWaiter G_GNUC_UNUSED = g_thread_new("init-waiter", svConnectionInitWaiter, con);
@@ -3397,26 +3382,30 @@ void svServerDisconnected (GtkWidget * vncObj)
 {
   Connection * con = svConnectionFromVNCObj(vncObj);
 
-  if (con == NULL)
-  {
-    svLog("svServerDisconnected: con is null", false);
+  if (!con)
     return;
-  }
+
 
   // log
-  char logStr[FILENAME_MAX] = {0};
-  snprintf(logStr, FILENAME_MAX - 1, "Server disconnected '%s - %s'", con->name->str, con->address->str);
+  char logStr[SV_LONG_STRING_SIZE] = {0};
+  snprintf(logStr, SV_LONG_STRING_SIZE - 1, "Server disconnected '%s - %s'", con->name->str, con->address->str);
   svLog(logStr, true);
 
   // if this is svnc, spawn ssh connection stop thread
   if (con->type == SV_TYPE_VNC_OVER_SSH)
     con->sshCloseThread = g_thread_new("ssh-closer", svSSHConnectionCloser, con);
 
+  // hide the vnc display widget
+  gtk_widget_set_visible(con->vncObj, false);
+
+  // remove the vnc display widget from the display stack
+  gtk_container_remove(GTK_CONTAINER(app->displayStack), con->vncObj);
+
   con->vncObj = NULL;
 
   // * set disconnect state and icon *
 
-  bool manualDisconnect = false;
+  gboolean manualDisconnect = false;
 
   // manual disconnect
   if (con->state == SV_STATE_CONNECTED && con->disconnectType != SV_DISC_VNC_ERROR && con->disconnectType != SV_DISC_SSH_ERROR)
@@ -3426,7 +3415,10 @@ void svServerDisconnected (GtkWidget * vncObj)
   }
 
   // timeout disconnect
-  else if (con->state == SV_STATE_WAITING && con->state != SV_STATE_TIMEOUT && con->disconnectType != SV_DISC_VNC_ERROR &&
+  //else if (con->state == SV_STATE_WAITING && con->state != SV_STATE_TIMEOUT && con->disconnectType != SV_DISC_VNC_ERROR &&
+    //con->disconnectType != SV_DISC_SSH_ERROR)
+    //con->state = SV_STATE_TIMEOUT;
+  else if (con->state == SV_STATE_WAITING && con->disconnectType != SV_DISC_VNC_ERROR &&
     con->disconnectType != SV_DISC_SSH_ERROR)
     con->state = SV_STATE_TIMEOUT;
 
@@ -3446,21 +3438,21 @@ void svServerDisconnected (GtkWidget * vncObj)
 /* handle vnc obj connection error event */
 void svServerError (VncConnection * conn, const char * message, void * data)
 {
-  if (message == NULL)
+  if (!message)
     return;
 
   Connection * con = (Connection *)data;
 
-  if (con == NULL)
+  if (!con)
     return;
 
   // log
-  char logStr[FILENAME_MAX] = {0};
-  snprintf(logStr, FILENAME_MAX - 1, "Server error '%s - %s': %s", con->name->str, con->address->str, message);
+  char logStr[SV_LONG_STRING_SIZE] = {0};
+  snprintf(logStr, SV_LONG_STRING_SIZE - 1, "Server error '%s - %s': %s", con->name->str, con->address->str, message);
   svLog(logStr, true);
 
   // set state based on 'timeout' or 'timed out' string in error message
-  if (strstr(message, "timeout") != NULL || strstr(message, "timed out") != NULL)
+  if (strstr(message, "timeout") || strstr(message, "timed out"))
     con->state = SV_STATE_TIMEOUT;
   else
     con->state = SV_STATE_ERROR;
@@ -3469,7 +3461,12 @@ void svServerError (VncConnection * conn, const char * message, void * data)
 
   // set connection's last error message
   g_string_assign(con->lastErrorMessage, message);
-  gtk_text_buffer_set_text(app->quickNoteLastErrorBuffer, con->lastErrorMessage->str, -1);
+
+  // only show newly-connected server if the listitem is selected
+  const char * selectedRowText = svSelectedRowText();
+
+  if (selectedRowText && strcmp(con->name->str, selectedRowText) == 0)
+    gtk_text_buffer_set_text(app->quickNoteLastErrorBuffer, con->lastErrorMessage->str, -1);
 }
 
 
@@ -3478,12 +3475,12 @@ void svServerInitialized (GtkWidget * vncObj)
 {
   Connection * con = svConnectionFromVNCObj(vncObj);
 
-  if (con == NULL)
+  if (!con)
     return;
 
   // log
-  char logStr[FILENAME_MAX] = {0};
-  snprintf(logStr, FILENAME_MAX - 1, "Server initialized (fully connected) '%s - %s'",
+  char logStr[SV_LONG_STRING_SIZE] = {0};
+  snprintf(logStr, SV_LONG_STRING_SIZE - 1, "Server initialized (fully connected) '%s - %s'",
     con->name->str, con->address->str);
   svLog(logStr, true);
 
@@ -3495,7 +3492,10 @@ void svServerInitialized (GtkWidget * vncObj)
 
   // set last connected time
   GDateTime * now = g_date_time_new_now_local();
-  g_string_assign(con->lastConnectTime, g_date_time_format(now, "%H:%M:%S--%Y-%m-%d"));
+
+  char * nowStr = g_date_time_format(now, "%H:%M:%S--%Y-%m-%d");  // <<<--- do NOT make const char *
+  g_string_assign(con->lastConnectTime, nowStr);
+  g_free(nowStr);
 
   // change listening display text and name to actual remote name, if available
   if (con->type == SV_TYPE_VNC_REVERSE)
@@ -3505,21 +3505,26 @@ void svServerInitialized (GtkWidget * vncObj)
     if (strcmp(remoteName, "") != 0)
     {
         // make time string
-        GDateTime * now = g_date_time_new_now_local();
-        const char * nowStr = g_date_time_format(now, "-%Y%m%d%H%M%S");
+        char * nowStrListen = g_date_time_format(now, "-%Y%m%d%H%M%S");  //  <<<--- do NOT make const char *
         GString * fullRemoteName = g_string_new(remoteName);
-        g_string_append(fullRemoteName, nowStr);
+        g_string_append(fullRemoteName, nowStrListen);
+        g_free(nowStrListen);
 
       svSetTextFromConnectionName(con->name->str, fullRemoteName->str);
       g_string_assign(con->name, fullRemoteName->str);
+      g_string_free(fullRemoteName, true);
     }
   }
 
-  // only show newly-connected server if the listitem is selected
-  char selectedRowText[1025] = {0};
-  svSelectedRowText(selectedRowText);
+  g_date_time_unref(now);
 
-  if (strcmp(con->name->str, selectedRowText) == 0)
+  // update tooltips info
+  svSetHostlistItemsTooltips();
+
+  // only show newly-connected server if the listitem is selected
+  const char * selectedRowText = svSelectedRowText();
+
+  if (selectedRowText && strcmp(con->name->str, selectedRowText) == 0)
   {
     // set 'last connected' label text
     char strTime[50] = {0};
@@ -3541,12 +3546,12 @@ void svServerAuthenticate (VncDisplay * display, GValueArray * credList)
 {
   const char ** data = g_new0(const char *, credList->n_values);
   gsize outLen = 0;
-  bool hasUsername = false;
+  gboolean hasUsername = false;
 
   Connection * con = svConnectionFromVNCObj(GTK_WIDGET(display));
 
   // if connection is null, close the connection and get out
-  if (con == NULL)
+  if (!con)
   {
     vnc_display_close(display);
     svLog("svServerAuthenticate - ERROR: con is null", false);
@@ -3554,12 +3559,12 @@ void svServerAuthenticate (VncDisplay * display, GValueArray * credList)
   }
 
   // log
-  char logStr[FILENAME_MAX] = {0};
-  snprintf(logStr, FILENAME_MAX - 1, "Server authentication '%s - %s'", con->name->str, con->address->str);
+  char logStr[SV_LONG_STRING_SIZE] = {0};
+  snprintf(logStr, SV_LONG_STRING_SIZE - 1, "Server authentication '%s - %s'", con->name->str, con->address->str);
   svLog(logStr, true);
 
   // set vnc login username, if any
-  char * loginUser = con->vncLoginUser->str;
+  const char * loginUser = con->vncLoginUser->str;
 
   // decode vnc and login passwords, if any
   unsigned char * vncPass = g_base64_decode(con->vncPass->str, &outLen);
@@ -3568,7 +3573,7 @@ void svServerAuthenticate (VncDisplay * display, GValueArray * credList)
   // loop through requested credentials and set each
   for (unsigned int i = 0 ; i < credList->n_values ; i++)
   {
-    GValue * cred = credList->values + 1;
+    GValue * cred = credList->values + i; //1;
 
     switch (g_value_get_enum(cred))
     {
@@ -3579,7 +3584,7 @@ void svServerAuthenticate (VncDisplay * display, GValueArray * credList)
         break;
       case VNC_DISPLAY_CREDENTIAL_PASSWORD:
       {
-        if (hasUsername == true)
+        if (hasUsername)
           data[i] = (char *)loginPass;
         else
           data[i] = (char *)vncPass;
@@ -3598,15 +3603,15 @@ void svServerAuthenticate (VncDisplay * display, GValueArray * credList)
   // loop through requested credentials and send data for each
   for (unsigned int i = 0 ; i < credList->n_values ; i++)
   {
-    GValue * cred = credList->values + 1;
+    GValue * cred = credList->values + i; //1;
 
     if (data[i])
     {
       if (vnc_display_set_credential(VNC_DISPLAY(display), g_value_get_enum(cred), data[i]))
       {
         // log
-        char logStr[FILENAME_MAX] = {0};
-        snprintf(logStr, FILENAME_MAX - 1, "Failed to set credential type '%d'", g_value_get_enum(cred));
+        //char logStr[SV_LONG_STRING_SIZE] = {0};
+        snprintf(logStr, SV_LONG_STRING_SIZE - 1, "Failed to set credential type '%d'", g_value_get_enum(cred));
         svLog(logStr, false);
 
         vnc_display_close(VNC_DISPLAY(display));
@@ -3616,8 +3621,8 @@ void svServerAuthenticate (VncDisplay * display, GValueArray * credList)
     else
     {
       // log
-      char logStr[FILENAME_MAX] = {0};
-      snprintf(logStr, FILENAME_MAX - 1, "Unsupported credential type '%d'", g_value_get_enum(cred));
+      //char logStr[SV_LONG_STRING_SIZE] = {0};
+      snprintf(logStr, SV_LONG_STRING_SIZE - 1, "Unsupported credential type '%d'", g_value_get_enum(cred));
       svLog(logStr, false);
 
       vnc_display_close(VNC_DISPLAY(display));
@@ -3633,49 +3638,58 @@ void svServerAuthenticate (VncDisplay * display, GValueArray * credList)
 
 /* saves the last selected connection's quicknote text */
 /* (usually before switching to another connection) */
-void svSavePreviousQuickNoteText (Connection * newConnection)
+void svSavePreviousQuickNoteText (const Connection * newConnection)
 {
   // save previous quicknote before switching
   Connection * prevCon = app->selectedConnection;
 
-  if (prevCon != NULL && prevCon != newConnection && strcmp(prevCon->name->str, "") != 0)
-  {
-    // get all text in quicknote buffer
-    GtkTextIter start;
-    GtkTextIter end;
+  if (!prevCon || prevCon == newConnection)
+    return;
 
-    gtk_text_buffer_get_start_iter(app->quickNoteBuffer, &start);
-    gtk_text_buffer_get_end_iter(app->quickNoteBuffer, &end);
+  if (!prevCon->name || prevCon->name->len == 0)
+    return;
 
-    char * qText = gtk_text_buffer_get_text(app->quickNoteBuffer, &start, &end, FALSE);
+  // quickNoteBuffer must exist
+  if (!app->quickNoteBuffer)
+    return;
 
-    // set connection's quicknote text by base64 encoding it
-    g_string_assign(prevCon->quickNote, g_base64_encode((const unsigned char *)qText, strlen(qText)));
-  }
+  // prevCon->quickNote must exist
+  if (!prevCon->quickNote)
+    return;
+
+  GtkTextIter start;
+  GtkTextIter end;
+
+  gtk_text_buffer_get_start_iter(app->quickNoteBuffer, &start);
+  gtk_text_buffer_get_end_iter(app->quickNoteBuffer, &end);
+
+  char * qText = gtk_text_buffer_get_text(app->quickNoteBuffer, &start, &end, false);
+  if (!qText)
+    return;
+
+  char * encoded = g_base64_encode((const unsigned char *)qText, strlen(qText));
+  g_string_assign(prevCon->quickNote, encoded);
+
+  g_free(encoded);
+  g_free(qText);
 }
 
 
 /* handle vnc obj 'server cut / copy (clipboard) text' event */
-void svHandleServerClipboard (VncConnection * conn, const char * text, void * data)
+void svHandleServerClipboard (VncConnection * unused, const char * text, void * data)
 {
-  printf("handle server clipboard\n");
+  //printf("handle server clipboard\n");
 
-  size_t nTextLength = strlen(text);
+  if (!data || !text)
+    return;
 
-  if (data == NULL || text == NULL || nTextLength < 1)
+  if (strlen(text) < 1)
     return;
 
   Connection * con = (Connection *)data;
 
-  if (con == NULL)
-    return;
-
-  //printf("server clipboard - len: %li, text: %s\n", nTextLength, text);
-
   // store this server's clipboard text to this connection's clipboard string
   g_string_assign(con->clipboard, text);
-
-  // below commented out because we will do this in connection right-click
 }
 
 
@@ -3683,16 +3697,16 @@ void svHandleServerClipboard (VncConnection * conn, const char * text, void * da
 void svConnectionCreate (Connection * con)
 {
   //  get out if state is CONNECTED or WAITING
-  if (con == NULL || con->state == SV_STATE_CONNECTED || con->state == SV_STATE_WAITING)
+  if (!con || con->state == SV_STATE_CONNECTED || con->state == SV_STATE_WAITING)
     return;
 
-  char logStr[FILENAME_MAX] = {0};
+  char logStr[SV_LONG_STRING_SIZE] = {0};
 
   // log
   if (con->type != SV_TYPE_VNC_REVERSE)
-    snprintf(logStr, FILENAME_MAX - 1, "Creating new connection for '%s - %s'", con->name->str, con->address->str);
+    snprintf(logStr, SV_LONG_STRING_SIZE - 1, "Creating new connection for '%s - %s'", con->name->str, con->address->str);
   else
-    snprintf(logStr, FILENAME_MAX - 1, "Creating new listening connection");
+    snprintf(logStr, SV_LONG_STRING_SIZE - 1, "Creating new listening connection");
 
   // log
   svLog(logStr, true);
@@ -3700,11 +3714,14 @@ void svConnectionCreate (Connection * con)
   // create a new vnc obj
   GtkWidget * vnc = vnc_display_new();
 
-  if (vnc == NULL)
+  if (!vnc)
   {
     svLog("svConnectionCreate - CRITICAL: Unable to create a new vnc object!", false);
     return;
   }
+
+  // clear error quicknote text
+  gtk_text_buffer_set_text(app->quickNoteLastErrorBuffer, "", -1);
 
   // set this connection's vnc obj
   con->vncObj = vnc;
@@ -3750,40 +3767,75 @@ void svConnectionCreate (Connection * con)
 }
 
 
+/* set error message on ssh failure */
+void svSetSSHLastErrorMessage (gpointer data)
+{
+  Connection * con = (Connection *)data;
+  if (!con)
+    return;
+
+  // get the buffer's end iter
+  GtkTextIter end;
+  gtk_text_buffer_get_end_iter(app->quickNoteLastErrorBuffer, &end);
+
+  // build new string
+  GString * newText = g_string_new(NULL);
+
+  // set the string to the latest error message
+  g_string_printf(newText, "%s\n- -\n", con->lastErrorMessage->str);
+
+  // insert the new error text at the end of the quicknote error area
+  gtk_text_buffer_insert(app->quickNoteLastErrorBuffer, &end, newText->str, -1);
+
+  g_string_free(newText, true);
+}
+
+
+/* set error icon from ssh error */
+void svSetConnectionIconFromSSHError (gpointer data)
+{
+  Connection * con = (Connection *)data;
+  if (!con)
+    return;
+
+  svSetIconFromConnectionName(con->name->str, SV_STATE_ERROR);
+}
+
+
 /* monitor ssh connection state and take appropriate action */
 gpointer svSSHMonitor (gpointer data)
 {
   Connection * con = (Connection *)data;
 
-  if (con == NULL)
+  if (!con)
     return NULL;
 
   // wait for ssh connection
   for (unsigned int i = 0; i < app->sshConnectWaitTime; i++)
   {
-    if (con->sshReady == true)
+    if (con->sshContinue)
       break;
 
     sleep(1);
   }
 
   // deal with ssh connection timeout / failure
-  if (con->sshReady == false)
+  if (!con->sshContinue)
   {
     // set connection's last error message
-    g_string_assign(con->lastErrorMessage, "svSSHMonitor - Could not connect to SSH server");
+    g_string_assign(con->lastErrorMessage, "Could not connect to SSH server");
     svLog(con->lastErrorMessage->str, false);
 
     // set last error message text view
-    gtk_text_buffer_set_text(app->quickNoteLastErrorBuffer, con->lastErrorMessage->str, -1);
+    g_idle_add_once(svSetSSHLastErrorMessage, con);
 
     // set connection variables
-    con->sshReady = false;
+    con->sshContinue = false;
     con->disconnectType = SV_DISC_SSH_ERROR;
     con->state = SV_STATE_ERROR;
 
     // set connection list row's icon
-    svSetIconFromConnectionName(con->name->str, SV_STATE_ERROR);
+    g_idle_add_once(svSetConnectionIconFromSSHError, con);
 
     return NULL;
   }
@@ -3793,10 +3845,10 @@ gpointer svSSHMonitor (gpointer data)
     sleep(1);
 
   // log
-  char logStr[FILENAME_MAX] = {0};
-  snprintf(logStr, FILENAME_MAX - 1, "Attempting SSH connection open '%s - %s'",
-    con->name->str, con->address->str);
-  svLog(logStr, true);
+  GString * logStr = g_string_new(NULL);
+  g_string_printf(logStr, "Attempting SSH connection open '%s - %s'", con->name->str, con->address->str);
+  svLog(logStr->str, true);
+  g_string_free(logStr, true);
 
   // attempt to connect to forwarded vnc
   svConnectionOpen(con);
@@ -3810,12 +3862,12 @@ gpointer svSSHConnectionCloser (gpointer data)
 {
   Connection * con = (Connection *)data;
 
-  if (con == NULL || con->sshStream == NULL)
+  if (!con || !con->sshStream)
     return NULL;
 
   // log
-  char logStr[FILENAME_MAX] = {0};
-  snprintf(logStr, FILENAME_MAX - 1, "Attempting to close SSH connection '%s - %s'",
+  char logStr[SV_LONG_STRING_SIZE] = {0};
+  snprintf(logStr, SV_LONG_STRING_SIZE - 1, "Attempting to close SSH connection '%s - %s'",
     con->name->str, con->address->str);
   svLog(logStr, true);
 
@@ -3828,7 +3880,7 @@ gpointer svSSHConnectionCloser (gpointer data)
   // close the ssh process stream
   pclose(con->sshStream);
 
-  con->sshReady = false;
+  con->sshContinue = false;
 
   return NULL;
 }
@@ -3838,30 +3890,25 @@ gpointer svSSHConnectionCloser (gpointer data)
 /* (ssh cleanup is performed in svServerDisconnected) */
 void svConnectionEnd (Connection * con)
 {
-  if (con == NULL)
+  if (!con)
     return;
 
   // log
-  char logStr[FILENAME_MAX] = {0};
+  char logStr[SV_LONG_STRING_SIZE] = {0};
 
   if (con->type != SV_TYPE_VNC_REVERSE)
-    snprintf(logStr, FILENAME_MAX - 1, "Ending connection '%s - %s'", con->name->str, con->address->str);
+    snprintf(logStr, SV_LONG_STRING_SIZE - 1, "Ending connection '%s - %s'", con->name->str, con->address->str);
   else
-    snprintf(logStr, FILENAME_MAX - 1, "Ending listening connection '%s'", con->name->str);
+    snprintf(logStr, SV_LONG_STRING_SIZE - 1, "Ending listening connection '%s'", con->name->str);
 
   svLog(logStr, true);
 
-  // hide the vnc display widget
-  gtk_widget_set_visible(con->vncObj, false);
+  // close the vnc display connection
+  if (con->vncObj)
+    vnc_display_close(VNC_DISPLAY(con->vncObj));
 
   // set tools menu items
   svSetToolsMenuItems(false);
-
-  // remove the vnc display widget from the display stack
-  gtk_container_remove(GTK_CONTAINER(app->displayStack), con->vncObj);
-
-  // close the vnc display connection
-  vnc_display_close(VNC_DISPLAY(con->vncObj));
 
   // clear connection clipboard
   g_string_truncate(con->clipboard, 0);
@@ -3869,7 +3916,7 @@ void svConnectionEnd (Connection * con)
 
 
 /* set tools menu connection-related items state */
-void svSetToolsMenuItems(bool sState)
+void svSetToolsMenuItems(gboolean sState)
 {
   gtk_widget_set_sensitive(GTK_WIDGET(app->toolsItems->requestUpdate), sState);
   gtk_widget_set_sensitive(GTK_WIDGET(app->toolsItems->send), sState);
@@ -3879,6 +3926,16 @@ void svSetToolsMenuItems(bool sState)
   gtk_widget_set_sensitive(GTK_WIDGET(app->toolsItems->screenshot), sState);
 }
 
+
+gboolean svFocusOnce (gpointer data)
+{
+  GtkWidget * w = GTK_WIDGET(data);
+
+  if (GTK_IS_WIDGET(w))
+    gtk_widget_grab_focus(w);
+
+  return FALSE;  // run once, then stop
+}
 
 /* switch from one connection to another */
 /* (usually from a single click on the connection listbox) */
@@ -3893,8 +3950,9 @@ void svConnectionSwitch (Connection * con)
   svSavePreviousQuickNoteText(con);
 
   // there's no connection here, blank quicknote stuffs
-  if (con == NULL)
+  if (!con)
   {
+    app->selectedConnection = NULL;
     gtk_label_set_text(GTK_LABEL(app->quickNoteLabel), "-");
     gtk_label_set_text(GTK_LABEL(app->quickNoteLastConnected), "-");
     gtk_text_buffer_set_text(app->quickNoteLastErrorBuffer, "", -1);
@@ -3903,8 +3961,8 @@ void svConnectionSwitch (Connection * con)
   else
   {
     // log
-    char logStr[FILENAME_MAX] = {0};
-    snprintf(logStr, FILENAME_MAX - 1, "Switching to connection '%s - %s'", con->name->str, con->address->str);
+    char logStr[SV_LONG_STRING_SIZE] = {0};
+    snprintf(logStr, SV_LONG_STRING_SIZE - 1, "Switching to connection '%s - %s'", con->name->str, con->address->str);
     svLog(logStr, true);
 
     // fill quicknote label, last error text and quicknote text
@@ -3917,16 +3975,31 @@ void svConnectionSwitch (Connection * con)
     gsize outLen = 0;
     unsigned char * qNote = g_base64_decode(con->quickNote->str, &outLen);
     gtk_text_buffer_set_text(app->quickNoteBuffer, (const char *)qNote, -1);
+    g_free(qNote);
 
     // set selected connection to passed connection
     app->selectedConnection = con;
 
     // show vnc obj if it's connected
-    if (con->state == SV_STATE_CONNECTED && con->vncObj != NULL)
+    if (con->state == SV_STATE_CONNECTED && con->vncObj)
     {
       // show vnc display
       gtk_widget_set_visible(con->vncObj, true);
       gtk_stack_set_visible_child(GTK_STACK(app->displayStack), con->vncObj);
+      // set keyboard focus
+      gtk_widget_set_can_focus(con->vncObj, true);
+      // tell the parent container that THIS is the focus child
+      gtk_container_set_focus_child(GTK_CONTAINER(app->displayStackScroller), app->displayStack);
+      gtk_container_set_focus_child(GTK_CONTAINER(app->displayStack), con->vncObj);
+
+      /* Attempt to focus the vnc display. Unfortunately we have to get a little 'creative'
+       * here and try two different ways (because the idle_add doesn't always work)
+       */
+
+      // try to focus the vnc display at idle time
+      g_idle_add((GSourceFunc)svFocusOnce, con->vncObj);
+      // try to focus the vnc display (again) after 300 milliseconds
+      g_timeout_add_once(300, (GSourceOnceFunc)gtk_widget_grab_focus, con->vncObj);
 
       // set tools menu items
       svSetToolsMenuItems(true);
@@ -3975,13 +4048,15 @@ void svConnectionOpen (Connection * con)
       break;
 
     case SV_TYPE_VNC_OVER_SSH:
+    {
       // set up local port string
       char localPortStr[10] = {0};
-      snprintf(localPortStr, 9, "%i", con->sshLocalPort);
+      snprintf(localPortStr, 9, "%ui", con->sshLocalPort);
 
       // connect vnc obj to local forwarded port
       vnc_display_open_host(VNC_DISPLAY(con->vncObj), "127.0.0.1", localPortStr);
       break;
+    }
 
     default:
       return;
@@ -3991,114 +4066,255 @@ void svConnectionOpen (Connection * con)
 }
 
 
+/* show error message about null con fields */
+void svShowNullConFieldsDialog (gpointer data)
+{
+  GtkWidget * dlg = gtk_message_dialog_new(GTK_WINDOW(app->mainWin),
+                                           GTK_DIALOG_DESTROY_WITH_PARENT,
+                                           GTK_MESSAGE_WARNING,
+                                           GTK_BUTTONS_OK,
+                                           "%s",
+                                           "One more more connection properties were NULL or invalid when attempting a SSH connection");
+
+  gtk_dialog_run(GTK_DIALOG(dlg));
+  gtk_widget_destroy(dlg);
+}
+
+
 /* create ssh session and ssh forwarding */
 /* (run as a thread due to blocking) */
 gpointer svCreateSSHConnection (gpointer data)
 {
   Connection * con = (Connection *)data;
 
-  if (con == NULL)
+  if (!con)
     return NULL;
 
   // log
-  char logStr[FILENAME_MAX] = {0};
-  snprintf(logStr, FILENAME_MAX - 1, "Creating new SSH connection for '%s - %s'", con->name->str, con->address->str);
-  svLog(logStr, true);
+  GString * logStr = g_string_new(NULL);
+  g_string_printf(logStr, "Creating new SSH connection for '%s - %s'", con->name->str, con->address->str);
+  svLog(logStr->str, true);
+  g_string_free(logStr, true);
 
   #ifdef _WIN32
   // deal with annoying Windows terminal window issues
   AllocConsole();
   ShowWindow(GetConsoleWindow(), SW_HIDE);
-
-  // set ssh check command
-  GString * sshCheck = g_string_new(app->sshCommand->str);
-  #else
-  GString * sshCheck = g_string_new(NULL);
-  g_string_printf(sshCheck, "%s > /dev/null", app->sshCommand->str);
   #endif
 
+  // build the ssh check command
+  char * sshCheck[] = {
+    app->sshCommand->str,
+    NULL
+  };
+
   // first check to see if the ssh command is working
-  GError * gError = NULL;
+  GError * gSSHCheckError = NULL;
+  char * stdOut = NULL;
+  char * stdErr = NULL;
+  int exitStatus = 0;
 
-  char ** chkCmd = g_strsplit(sshCheck->str, " ", -1);
+  //for (int i = 0; sshCheck[i] != NULL; i++)
+  //{
+    //printf("%s\n", sshCheck[i]);
+  //}
 
-  bool checkResult = g_spawn_sync(NULL,         // Working directory (NULL uses current directory)
-                      chkCmd,      // Command to execute
+  gboolean checkResult = g_spawn_sync(NULL,         // Working directory (NULL uses current directory)
+                      sshCheck,      // Command to execute
                       NULL,         // Environment variables
                       G_SPAWN_DEFAULT, // Flags
                       NULL,         // Child setup function
                       NULL,         // User data for child setup
-                      NULL,         // Standard output (NULL ignores it)
-                      NULL,         // Standard error (NULL ignores it)
-                      NULL, // Exit status
-                      &gError);
+                      &stdOut,         // Standard output (NULL ignores it)
+                      &stdErr,      // Standard error (NULL ignores it)
+                      &exitStatus, // Exit status
+                      &gSSHCheckError);
+
+  (void)checkResult;
 
   // deal with ssh command check failure
-  if (checkResult != true)
+  // I'm only interested in gSSHCheckError and I'm purposely ignoring checkResult and exitStatus
+  if (gSSHCheckError)
   {
     // problemos
-    //printf("ssh error: %i - %s\n", gError->code, gError->message);
+    printf("ssh error - gError code: %i, gError message: %s\n", gSSHCheckError->code, gSSHCheckError->message);
+    //printf("ssh error - exitStatus: %i, stdErr: %s\n", exitStatus, stdErr);
 
     // log error
-    char errStr[FILENAME_MAX] = {0};
-    snprintf(errStr, FILENAME_MAX - 1, "svCreateSSHConnection - SSH command not working for connection '%s - %s'\nError: %s",
-      con->name->str, con->address->str, gError->message);
-    svLog(errStr, false);
-    g_error_free(gError);
+    GString * errStr = g_string_new(NULL);
+    g_string_printf(errStr,
+      "SSH command not working for connection '%s - %s'\nError: %s\nCheck command or installation",
+      con->name->str, con->address->str, gSSHCheckError->message);
+    svLog(errStr->str, false);
 
     // set connection's last error message
-    g_string_assign(con->lastErrorMessage, "svCreateSSHConnection - SSH command check failed. Check SSH command or install.");
-    gtk_text_buffer_set_text(app->quickNoteLastErrorBuffer, con->lastErrorMessage->str, -1);
+    g_string_assign(con->lastErrorMessage, errStr->str);
+    g_idle_add_once(svSetSSHLastErrorMessage, con);
+    g_string_free(errStr, true);
 
     // set connection variables
-    con->sshReady = false;
+    con->sshContinue = false;
     con->disconnectType = SV_DISC_SSH_ERROR;
     con->state = SV_STATE_ERROR;
 
     // set connection list row's icon
-    svSetIconFromConnectionName(con->name->str, SV_STATE_ERROR);
+    g_idle_add_once(svSetConnectionIconFromSSHError, con);
+
+    g_free(stdOut);
+    g_free(stdErr);
+
+    //printf("DEBUG: svCreateSSHConnection - readError pointer = %p\n", (void *)gError);
+    g_error_free(gSSHCheckError);
 
     return NULL;
   }
 
-  // --- looks like we're okay ---
-  GString * sshCommandLine = g_string_new(NULL);
+  g_free(stdOut);
+  g_free(stdErr);
 
-  // build the command string for our popen() call
-  g_string_printf(sshCommandLine, "%s %s@%s -t -t -p %s -o ConnectTimeout=%i -L %i:127.0.0.1:%s -i %s  > /dev/null",
-    app->sshCommand->str, con->sshUser->str, con->address->str, con->sshPort->str, app->sshConnectWaitTime,
-    con->sshLocalPort, con->vncPort->str, con->sshPrivKeyfile->str);
+  //if (gSSHCheckError)
+  //{
+    ////printf("DEBUG: svCreateSSHConnection - readError pointer = %p\n", (void *)gSSHCheckError);
+    //g_error_free(gSSHCheckError);
+  //}
+
+  // --- looks like we're okay ---
+
+  // check that all con fields are non-null
+  if (!con->sshUser || !con->address || con->sshPort <= 0 ||
+      con->sshLocalPort <= 0 || !con->vncPort || !con->sshPrivKeyfile)
+  {
+    g_idle_add_once(svShowNullConFieldsDialog, NULL);
+    return NULL;
+  }
+
+  GError * sshRunErr = NULL;
+  GPid pid = 0;
+
+  // ** build the command string for our g_spawn_async_with_pipes call **
+
+  // build "user@host"
+  GString * tgt = g_string_new(NULL);
+  g_string_printf(tgt, "%s@%s", con->sshUser->str, con->address->str);
+  char * sshTargetString = tgt->str;
+
+  // build "localPort:127.0.0.1:vncPort"
+  GString * fwd = g_string_new(NULL);
+  g_string_printf(fwd, "%i:127.0.0.1:%s", con->sshLocalPort, con->vncPort->str);
+  char * localForwardString = fwd->str;
+
+  // build argv array for SSH
+  char * sshArgv[] =
+  {
+    app->sshCommand->str,          // "ssh"
+    "-t",
+    "-t",
+    "-p", con->sshPort->str,
+    "-o", "ConnectTimeout=5",
+    "-L", localForwardString,
+    "-i", con->sshPrivKeyfile->str,
+    sshTargetString,
+    NULL
+  };
+
+  //for (int i = 0; sshArgv[i] != NULL; i++)
+  //{
+    //printf("%s\n", sshArgv[i]);
+  //}
 
   // attempt to call the system's ssh client and open write stream
-  con->sshStream = popen(sshCommandLine->str, "w");
+  gboolean sshRunOkay = g_spawn_async_with_pipes(
+                  NULL,
+                  sshArgv,               // parsed SSH command
+                  NULL,
+                  G_SPAWN_DO_NOT_REAP_CHILD,
+                  NULL,
+                  NULL,
+                  &pid,
+                  &con->sshStdIn,
+                  NULL,
+                  NULL,
+                  &sshRunErr);
 
-  // handle failure
-  if (con->sshStream == NULL)
+  (void)sshRunOkay;
+
+  // we only care about sshRunError, not sshRunOkay
+  if (sshRunErr)
   {
     // something -- happened - log the failure
-    char errStr[FILENAME_MAX] = {0};
-    snprintf(errStr, FILENAME_MAX - 1, "svCreateSSHConnection - SSH command failed for '%s - %s'", con->name->str, con->address->str);
-    svLog(errStr, false);
+    GString * errStr = g_string_new(NULL);
+    g_string_printf(errStr, "SSH command failed for '%s - %s'", con->name->str, con->address->str);
+    svLog(errStr->str, false);
 
     // set connection's last error message
-    g_string_assign(con->lastErrorMessage, "SSH command failed. Check SSH command or install.");
-    gtk_text_buffer_set_text(app->quickNoteLastErrorBuffer, con->lastErrorMessage->str, -1);
+    g_string_assign(con->lastErrorMessage, errStr->str);
+    g_idle_add_once(svSetSSHLastErrorMessage, con);
+    g_string_free(errStr, true);
 
     // set connection variables
-    con->sshReady = false;
+    con->sshContinue = false;
     con->disconnectType = SV_DISC_SSH_ERROR;
     con->state = SV_STATE_ERROR;
 
     // set connection list row icon
-    svSetIconFromConnectionName(con->name->str, SV_STATE_ERROR);
+    g_idle_add_once(svSetConnectionIconFromSSHError, con);
+
+    // free up stuff
+    g_string_free(tgt, true);
+    g_string_free(fwd, true);
+
+    if (sshRunErr)
+      g_error_free(sshRunErr);
+
+    return NULL;
   }
 
-  con->sshReady = true;
+  // free up stuff
+  g_string_free(tgt, true);
+  g_string_free(fwd, true);
 
-  if (gError != NULL)
-    g_error_free(gError);
+  if (sshRunErr)
+    g_error_free(sshRunErr);
+
+  con->sshPid = pid;
+
+  // open stdin stream
+  con->sshStream = fdopen(con->sshStdIn, "w");
+
+  // stdin stream failed to open
+  if (!con->sshStream)
+  {
+    // something -- happened - log the failure
+    GString * errStr = g_string_new(NULL);
+    g_string_printf(errStr, "Failed to open SSH input stream for '%s - %s'", con->name->str, con->address->str);
+    svLog(errStr->str, false);
+
+    // set connection's last error message
+    g_string_assign(con->lastErrorMessage, errStr->str);
+    g_idle_add_once(svSetSSHLastErrorMessage, con);
+    g_string_free(errStr, true);
+
+    // set connection variables
+    con->sshContinue = false;
+    con->disconnectType = SV_DISC_SSH_ERROR;
+    con->state = SV_STATE_ERROR;
+
+    // set connection list row icon
+    g_idle_add_once(svSetConnectionIconFromSSHError, con);
+
+    return NULL;
+  }
+
+  con->sshContinue = true;
 
   return NULL;
+}
+
+
+void svAppMenuQuitAction (GSimpleAction * action, GVariant * parameter, gpointer user_data)
+{
+  svDoQuit();
+  g_application_quit(G_APPLICATION(user_data));
 }
 
 
@@ -4113,23 +4329,29 @@ static void svAppActivate (GtkApplication * gtkApp, gpointer userData)
 /* main program */
 int main (int argc, char ** argv)
 {
-  int status = 0;
-
   // give life to our app variable
-  app = (App *)malloc(sizeof(App));
+  app = g_new0(App, 1);
 
   // initialize the app struct
   svInitAppVars();
 
   // set application stuffs
-  app->gApp = gtk_application_new ("org.will.brokenbourgh", 0);
+  app->gApp = gtk_application_new ("org.will.brokenbourgh", G_APPLICATION_DEFAULT_FLAGS);
+  const GActionEntry app_actions[] = {
+    {"quit", svAppMenuQuitAction, NULL, NULL, NULL}
+  };
+
+  g_action_map_add_action_entries(G_ACTION_MAP(app->gApp), app_actions, G_N_ELEMENTS(app_actions), app->gApp);
+
   g_signal_connect(app->gApp, "activate", G_CALLBACK(svAppActivate), NULL);
 
   // run our app
-  status = g_application_run(G_APPLICATION(app->gApp), 0, NULL);
+  int status = g_application_run(G_APPLICATION(app->gApp), argc, argv); //0, NULL);
 
   // unref after we're done
   g_object_unref(app->gApp);
+
+  g_free(app);
 
   return status;
 }
