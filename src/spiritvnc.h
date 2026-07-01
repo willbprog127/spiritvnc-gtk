@@ -1,5 +1,5 @@
 /*
- * spiritvnc.h - 2022-2025 Will Brokenbourgh
+ * spiritvnc.h - 2022-2026 Will Brokenbourgh
  * part of the SpiritVNC - Gtk project
  *
 */
@@ -98,6 +98,7 @@ typedef struct Application
   unsigned int vncConnectWaitTime;
   unsigned int scanTimeout;
   gboolean addNewConnection;
+  gboolean inConfigWrite;
 
   //# flags, states and stuff
   //mouse_click_type = None
@@ -242,6 +243,8 @@ typedef struct ToolsMenuItems
 
 typedef struct SendKeysObj
 {
+  char type;
+  GString * textToSend;
   GtkWidget * win;
   GtkWidget * textView;
   Connection * con;
@@ -280,6 +283,11 @@ enum ConnectionDisconnectType
   SV_DISC_SSH_ERROR
 };
 
+enum SendKeysObjectType
+{
+  SV_SENDKEYS_TYPE_ENTRY,
+  SV_SENDKEYS_TYPE_OTHER
+};
 
 /* functions */
 void svDoQuit ();
@@ -295,6 +303,8 @@ Connection * svConnectionFromName (const char *);
 void svConnectionSwitch (Connection *);
 gpointer svCreateSSHConnection (gpointer);
 gpointer svSSHMonitor (gpointer);
+GdkFilterReturn svEventFilter(GdkXEvent *, GdkEvent *, gpointer);
+gboolean svFocusOnce (gpointer);
 void svFreeConnObject(Connection *);
 Connection * svGetSelectedConnectionListConnection ();
 void svHandleAddNewConnectionMenuItem ();

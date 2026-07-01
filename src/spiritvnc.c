@@ -179,6 +179,7 @@ void svInitAppVars ()
   app->scanTimeout = 3;
   app->vncConnectWaitTime = 10;
   app->addNewConnection = true;
+  app->inConfigWrite = false;
 
   // ssh stuff
   app->sshCommand = g_string_new(NULL);
@@ -330,20 +331,41 @@ void svHandleSendEnteredKeystrokesCancel (GtkButton * self, gpointer userData)
 void svHandleSendEnteredKeystrokesSend (GtkButton * self, gpointer userData)
 {
   SendKeysObj * obj = (SendKeysObj *)userData;
-  if (!obj || !obj->win || !obj->textView || !obj->con || !obj->con->vncObj)
+  if (!obj || !obj->con || !obj->con->vncObj || obj->con->state != SV_STATE_CONNECTED)
     return;
 
-  GtkTextBuffer * tb = gtk_text_view_get_buffer(GTK_TEXT_VIEW(obj->textView));
+  char * text = NULL;
 
-  GtkTextIter start, end;
-  gtk_text_buffer_get_start_iter(tb, &start);
-  gtk_text_buffer_get_end_iter(tb, &end);
-
-  char * text = gtk_text_buffer_get_text(tb, &start, &end, false);  //  <<<--- do NOT make const char *
-  if (!text || text[0] == '\0')
+  // we're sending keys from the send keys window
+  if (obj->type == SV_SENDKEYS_TYPE_ENTRY)
   {
-    g_free(text);
-    return;
+    if (!obj->textView)
+      return;
+
+    GtkTextBuffer * tb = gtk_text_view_get_buffer(GTK_TEXT_VIEW(obj->textView));
+
+    GtkTextIter start, end;
+    gtk_text_buffer_get_start_iter(tb, &start);
+    gtk_text_buffer_get_end_iter(tb, &end);
+
+    text = gtk_text_buffer_get_text(tb, &start, &end, false);  //  <<<--- do NOT make const char *
+    if (!text || text[0] == '\0')
+    {
+      g_free(text);
+      return;
+    }
+  }
+  // we're sending keys directly from another function
+  else
+  {
+    if (!obj->textToSend || obj->textToSend->len == 0)
+      return;
+
+    // set text
+    text = g_strdup(obj->textToSend->str);
+
+    // free up gstring
+    g_string_free(obj->textToSend, true);
   }
 
   size_t len = strlen(text);
@@ -359,7 +381,9 @@ void svHandleSendEnteredKeystrokesSend (GtkButton * self, gpointer userData)
   g_free(keys);
   g_free(text);
 
-  gtk_widget_destroy(obj->win);
+  if (obj->win)
+    gtk_widget_destroy(obj->win);
+
   g_free(obj);
 }
 
@@ -2258,12 +2282,18 @@ void svConfigRead ()
 /* write the configuration file */
 void svConfigWrite ()
 {
-  //return;  // <<<---############################################ REMOVE@!!!!!!!! ##################################
+  // no re-entrance
+  if (app->inConfigWrite)
+    return;
+
   if (!svConfigCreateNew(false))
   {
     svLog("svConfigWrite - Could not create new config dirs or file", false);
     return;
   }
+
+  // set non-re-entrance flag
+  app->inConfigWrite = true;
 
   GString * outStr = g_string_new(NULL);
 
@@ -2361,6 +2391,9 @@ void svConfigWrite ()
 
   g_list_free(rows);
   g_string_free(outStr, true);
+
+  // set no-re-entrance flag
+  app->inConfigWrite = false;
 }
 
 
@@ -2956,8 +2989,8 @@ void svHandleSyncClipboardMenuItem (GtkMenuItem * gMenuItem, gpointer userData)
 }
 
 
-/* menu item handler - store right-clicked connection's f12 macro (NOT on clipboard!) */
-void svHandleCopyF12MacroMenuItem (GtkMenuItem * gMenuItem, gpointer userData)
+/* menu item handler - get right-clicked connection's f12 macro (NOT on clipboard!) */
+void svHandleF12GetMacroMenuItem (GtkMenuItem * gMenuItem, gpointer userData)
 {
   Connection * con = (Connection *)userData;
 
@@ -2969,12 +3002,36 @@ void svHandleCopyF12MacroMenuItem (GtkMenuItem * gMenuItem, gpointer userData)
 
 
 /* menu item handler - set right-clicked connection's f12 macro (NOT from clipboard!) */
-void svHandlePasteF12MacroMenuItem (GtkMenuItem * gMenuItem, gpointer userData)
+void svHandleF12PutMacroMenuItem (GtkMenuItem * gMenuItem, gpointer userData)
 {
-  //Connection * con = (Connection *)userData;
+  Connection * con = (Connection *)userData;
 
-  //if (!con)
-    //return;
+  if (!con)
+    return;
+
+  int res = -1;
+
+  // if there's an existing f12 macro, confirm overwriting first
+  if (con->f12Macro->len > 0)
+  {
+    GtkWidget * dialog = gtk_message_dialog_new(GTK_WINDOW(app->mainWin),
+                                    GTK_DIALOG_DESTROY_WITH_PARENT,
+                                    GTK_MESSAGE_QUESTION,
+                                    GTK_BUTTONS_YES_NO,
+                                    "Are you sure you want to replace the existing F12 macro for '%s'?",
+                                    con->name->str);
+    res = gtk_dialog_run(GTK_DIALOG(dialog));
+
+    // destroy the dialog box
+    gtk_widget_destroy(dialog);
+  }
+
+  // only set f12 macro if user confirms 'ok' to overwriting or there's nothing to overwrite
+  if (res == GTK_RESPONSE_YES || con->f12Macro->len == 0)
+  {
+    g_string_assign(con->f12Macro, app->f12Storage->str);
+    svConfigWrite();
+  }
 }
 
 
@@ -3215,22 +3272,36 @@ void svConnectionRightClick (Connection * con)
   gtk_menu_shell_append(GTK_MENU_SHELL(rightMenu), edit);
   g_signal_connect(edit, "activate", G_CALLBACK(svHandleEditMenuItem), con);
 
-  //// copy f12 macro menu item
-  //GtkWidget * copymacro = gtk_menu_item_new_with_label("Copy F12 macro");
-  //svSetTooltip(copymacro, "Stores this connection's F12 macro for use with a listening connection's F12 macro");
-  //gtk_menu_item_set_use_underline(GTK_MENU_ITEM(copymacro), true);
-  //gtk_menu_shell_append(GTK_MENU_SHELL(rightMenu), copymacro);
-  //g_signal_connect(copymacro, "activate", G_CALLBACK(svHandleCopyF12MacroMenuItem), con);
+  // f12 macro section
+  gtk_menu_shell_append(GTK_MENU_SHELL(rightMenu), gtk_separator_menu_item_new());
 
-  //// paste f12 macro menu item
-  //if (con->state == SV_STATE_CONNECTED)
-  //{
-    //GtkWidget * pastemacro = gtk_menu_item_new_with_label("Copy F12 macro");
-    //gtk_menu_item_set_use_underline(GTK_MENU_ITEM(pastemacro), true);
-    //gtk_widget_set_sensitive(GTK_WIDGET(pastemacro), true);
-    //gtk_menu_shell_append(GTK_MENU_SHELL(rightMenu), pastemacro);
-    //g_signal_connect(pastemacro, "activate", G_CALLBACK(svHandlePasteF12MacroMenuItem), con);
-  //}
+  // get f12 macro menu item
+  GtkWidget * getF12 = gtk_menu_item_new_with_label("Get F12 macro");
+  svSetTooltip(getF12, "Gets this connection's F12 macro so it can put into another connection's F12 macro");
+  gtk_menu_item_set_use_underline(GTK_MENU_ITEM(getF12), false);
+  gtk_widget_set_sensitive(GTK_WIDGET(getF12), false);
+  gtk_menu_shell_append(GTK_MENU_SHELL(rightMenu), getF12);
+  g_signal_connect(getF12, "activate", G_CALLBACK(svHandleF12GetMacroMenuItem), con);
+
+  // only enable if this connection has f12 macro text
+  if (con->f12Macro->len > 0)
+    gtk_widget_set_sensitive(GTK_WIDGET(getF12), true);
+
+  // put f12 macro menu item
+  GtkWidget * putF12 = gtk_menu_item_new_with_label("Put F12 macro");
+  svSetTooltip(putF12, "Puts a stored F12 macro into this connection's F12 macro");
+  gtk_menu_item_set_use_underline(GTK_MENU_ITEM(putF12), true);
+  gtk_widget_set_sensitive(GTK_WIDGET(putF12), false);
+  gtk_menu_shell_append(GTK_MENU_SHELL(rightMenu), putF12);
+  g_signal_connect(putF12, "activate", G_CALLBACK(svHandleF12PutMacroMenuItem), con);
+
+  // only enable when connected and there's something to 'put'
+  //if (con->state == SV_STATE_CONNECTED && app->f12Storage->len > 0)
+  if (app->f12Storage->len > 0)
+    gtk_widget_set_sensitive(GTK_WIDGET(putF12), true);
+
+  // delete section
+  gtk_menu_shell_append(GTK_MENU_SHELL(rightMenu), gtk_separator_menu_item_new());
 
   // delete menu item
   GtkWidget * delete = gtk_menu_item_new_with_label("Delete...");
@@ -3535,6 +3606,23 @@ void svServerInitialized (GtkWidget * vncObj)
     gtk_widget_show(vncObj);
     gtk_stack_set_visible_child(GTK_STACK(app->displayStack), vncObj);
 
+    // set keyboard focus
+    gtk_widget_set_can_focus(vncObj, true);
+    // tell the parent container that THIS is the focus child
+    gtk_container_set_focus_child(GTK_CONTAINER(app->displayStackScroller), app->displayStack);
+    gtk_container_set_focus_child(GTK_CONTAINER(app->displayStack), vncObj);
+
+    /* Attempt to focus the vnc display. Unfortunately we have to get a little 'creative'
+     * here and try two different ways (because the idle_add doesn't always work)
+     */
+
+    // try to focus the vnc display at idle time
+    g_idle_add((GSourceFunc)svFocusOnce, vncObj);
+    // try to focus the vnc display (again) after 300 milliseconds
+    g_timeout_add_once(300, (GSourceOnceFunc)gtk_widget_grab_focus, vncObj);
+
+    gtk_widget_grab_focus(vncObj);
+
     // set tools menu items
     svSetToolsMenuItems(true);
   }
@@ -3693,6 +3781,44 @@ void svHandleServerClipboard (VncConnection * unused, const char * text, void * 
 }
 
 
+/* handle key presses */
+gboolean svHandleKeyboard (GtkWidget * widget, GdkEventKey * event, gpointer data)
+{
+  // f11 - screenshot
+  if (event->keyval == GDK_KEY_F11)
+  {
+    svHandleScreenshotMenuItem();
+    return true;
+  }
+
+  // f12 macro
+  if (event->keyval == GDK_KEY_F12)
+  {
+    SendKeysObj * obj = g_new0(SendKeysObj, 1);
+    if (!obj)
+      return false;
+
+    // get the connections glist item for this index
+    Connection * con = svGetSelectedConnectionListConnection();
+    if (!con || con->name->len == 0)
+      return false;
+
+    // set the obj properties for 'OTHER' type
+    obj->type = SV_SENDKEYS_TYPE_OTHER;
+    obj->win = NULL;
+    obj->con = con;
+    obj->textToSend = g_string_new(con->f12Macro->str);
+
+    // send the f12 macro
+    svHandleSendEnteredKeystrokesSend(NULL, obj);
+
+    return true;  // stop further handling
+  }
+
+  return false;   // allow normal processing
+}
+
+
 /* create and start a new connection */
 void svConnectionCreate (Connection * con)
 {
@@ -3726,14 +3852,26 @@ void svConnectionCreate (Connection * con)
   // set this connection's vnc obj
   con->vncObj = vnc;
 
+  //// set the event mask
+  //gtk_widget_add_events(con->vncObj, GDK_KEY_PRESS_MASK);
+
+  //GtkEventController * keyctl = gtk_event_controller_key_new(con->vncObj);
+
+  //gtk_event_controller_set_propagation_phase(keyctl, GTK_PHASE_CAPTURE);
+
+  //g_signal_connect(keyctl, "key-pressed", G_CALLBACK(svHandleKeyboard), con);
+
+  //gtk_widget_set_can_focus(con->vncObj, true);
+  //gtk_widget_grab_focus(con->vncObj);
+
   // connect vnc obj signals
   g_signal_connect(con->vncObj, "vnc-initialized", G_CALLBACK(svServerInitialized), NULL);
   g_signal_connect(con->vncObj, "vnc-connected", G_CALLBACK(svServerConnected), NULL);
   g_signal_connect(con->vncObj, "vnc-disconnected", G_CALLBACK(svServerDisconnected), NULL);
   g_signal_connect(con->vncObj, "vnc-auth-credential", G_CALLBACK(svServerAuthenticate), NULL);
   g_signal_connect(con->vncObj, "vnc-error", G_CALLBACK(svServerError), con);
-  g_signal_connect(con->vncObj, "vnc-error", G_CALLBACK(svServerError), con);
   g_signal_connect(con->vncObj, "vnc-server-cut-text", G_CALLBACK(svHandleServerClipboard), con);
+  g_signal_connect(con->vncObj, "key-press-event", G_CALLBACK(svHandleKeyboard), con);
 
   // change connection list icon
   svSetIconFromConnectionName(con->name->str, SV_STATE_WAITING);
@@ -4000,6 +4138,8 @@ void svConnectionSwitch (Connection * con)
       g_idle_add((GSourceFunc)svFocusOnce, con->vncObj);
       // try to focus the vnc display (again) after 300 milliseconds
       g_timeout_add_once(300, (GSourceOnceFunc)gtk_widget_grab_focus, con->vncObj);
+
+      gtk_widget_grab_focus(con->vncObj);
 
       // set tools menu items
       svSetToolsMenuItems(true);
@@ -4315,6 +4455,36 @@ void svAppMenuQuitAction (GSimpleAction * action, GVariant * parameter, gpointer
 {
   svDoQuit();
   g_application_quit(G_APPLICATION(user_data));
+}
+
+
+GdkFilterReturn svEventFilter(GdkXEvent * xevent, GdkEvent * event, gpointer data)
+{
+  // event->type gives you ANY event:
+  // GDK_KEY_PRESS
+  // GDK_KEY_RELEASE
+  // GDK_BUTTON_PRESS
+  // GDK_FOCUS_CHANGE
+  // GDK_CONFIGURE
+  // GDK_ENTER_NOTIFY
+  // GDK_LEAVE_NOTIFY
+  // etc.
+  //if (event->type == GDK_KEY_PRESS)
+
+  //GdkEventType eType = gdk_event_get_event_type(event);
+
+  if (event->type != -1)
+    printf("event type - %i\n", event->type);
+
+  //if (eType == GDK_KEY_PRESS)
+  //{
+      ////event->key.keyval == GDK_KEY_F12)
+    //printf("key press - %i\n", event->key.keyval);
+    ////g_print("F12 caught in filter\n");
+    //return GDK_FILTER_REMOVE;  // stop gtk-vnc from consuming it
+  //}
+
+  return GDK_FILTER_CONTINUE;  // allow normal processing
 }
 
 
