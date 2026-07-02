@@ -55,8 +55,6 @@
 
 #include <stdbool.h>
 
-#define SV_LONG_STRING_SIZE 1024
-
 // forward declarations
 typedef struct Connection Connection;
 typedef struct ToolsMenuItems ToolsMenuItems;
@@ -84,19 +82,22 @@ typedef struct Application
   GtkTextBuffer * quickNoteLastErrorBuffer;
   GtkTextBuffer * quickNoteBuffer;
 
+  GtkWidget * connectionActionsWindow;
+
   // objects
   ToolsMenuItems * toolsItems;
   Connection * selectedConnection;
   GString * f12Storage;
 
   // app properties
-  int serverListWidth;
+  gint serverListWidth;
+  gint serverListWidthLast;
   gboolean showTooltips;
   gboolean logToFile;
   gboolean maximized;
   gboolean debugMode;
-  unsigned int vncConnectWaitTime;
-  unsigned int scanTimeout;
+  guint vncConnectWaitTime;
+  guint scanTimeout;
   gboolean addNewConnection;
   gboolean inConfigWrite;
 
@@ -109,7 +110,7 @@ typedef struct Application
   //is_writing_config = False
   //listen_mode = False
   gboolean listenMode;
-  unsigned int listenPort;
+  guint listenPort;
   GSocket * listenSocket;
   GSource * listenSource;
 
@@ -125,8 +126,8 @@ typedef struct Application
 
   // ssh stuff
   GString * sshCommand;
-  unsigned int sshConnectWaitTime;
-  unsigned int sshShowWaitTime;
+  guint sshConnectWaitTime;
+  guint sshShowWaitTime;
 
 } App;
 
@@ -137,7 +138,7 @@ typedef struct Connection
   GString * name;
   GString * group;
   GString * address;
-  unsigned int type;
+  guint type;
   GString * vncPort;
   GString * vncPass;
   GString * vncLoginUser;
@@ -146,7 +147,7 @@ typedef struct Connection
   gboolean scale;
   gboolean lossyEncoding;
   gboolean showRemoteCursor;
-  unsigned int quality;
+  guint quality;
   GString * sshUser;
   GString * sshPass;
   GString * sshPort;
@@ -164,23 +165,23 @@ typedef struct Connection
   GString * customCmd3Label;
   GString * customCmd3;
   // 'private' vars
-  unsigned int state;
+  guint state;
   GtkWidget * vncObj;
-  unsigned int disconnectType;
+  guint disconnectType;
   GString * lastErrorMessage;
   GString * lastConnectTime;
-  unsigned int sshLocalPort;
+  guint sshLocalPort;
   FILE * sshCmdStream;
   GThread * sshThread;
   GThread * sshMonitorThread;
   GThread * sshCloseThread;
   gboolean sshContinue;
   GPid sshPid;
-  int sshStdIn;
+  gint sshStdIn;
   FILE * sshStream;
   GString * clipboard;
   GtkWidget * settingsWin;
-  int listenFd;
+  gint listenFd;
 } Connection;
 
 typedef struct
@@ -319,18 +320,19 @@ void svHandleSendEnteredKeystrokesSend (GtkButton *, gpointer);
 void svHandleScreenshotMenuItem ();
 void svInitAppVars ();
 void svInitConnObject (Connection *);
-void svInsertHostListRow (const char *, int, Connection *);
+void svInsertHostListRow (const char *, gint, Connection *);
 void svLog (const char *, gboolean);
 void svConnectionOpen (Connection *);
 void svToLower (char *);
 void svSavePreviousQuickNoteText (const Connection *);
 void svServerError (VncConnection *, const char *, void *);
-void svSetIconFromConnectionName (const char *, unsigned int);
+void svSetIconFromConnectionName (const char *, guint);
 void svSetTextFromConnectionName (const char *, const char *);
 void svSetToolsMenuItems(gboolean);
 void svSetTooltip(GtkWidget *, const char *);
 void svSetMenuItemTooltips ();
 void svShowAppOptionsWindow ();
+void svShowConnectionActionsWindow ();
 gpointer svSSHConnectionCloser (gpointer);
 void svStartConnection (Connection *);
 gboolean svStringToBool (const char *);
