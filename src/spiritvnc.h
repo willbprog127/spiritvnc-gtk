@@ -55,6 +55,8 @@
 
 #include <stdbool.h>
 
+#define SV_APP_VERSION "0.0.2"
+
 // forward declarations
 typedef struct Connection Connection;
 typedef struct ToolsMenuItems ToolsMenuItems;
@@ -78,6 +80,14 @@ typedef struct Application
   GtkWidget * quickNoteLastError;
   GtkWidget * quickNoteView;
 
+  // toolbar controls
+  GtkWidget * toolbuttonListen;
+  GtkWidget * listenImage;
+  GtkWidget * toolbuttonScan;
+  GtkWidget * scanImage;
+  GtkWidget * addConnectionToolbutton;
+  GtkWidget * addConnectionImage;
+
   // text buffers for quicknote stuffz
   GtkTextBuffer * quickNoteLastErrorBuffer;
   GtkTextBuffer * quickNoteBuffer;
@@ -95,34 +105,24 @@ typedef struct Application
   gboolean showTooltips;
   gboolean logToFile;
   gboolean maximized;
+  gboolean fullscreen;
+  gboolean scanMode;
+  guint scanTimeout;
   gboolean debugMode;
   guint vncConnectWaitTime;
-  guint scanTimeout;
   gboolean addNewConnection;
-  gboolean inConfigWrite;
 
   //# flags, states and stuff
-  //mouse_click_type = None
-  //startup = True
-  //show_intro = False
-  //is_fullscreen = False
-  //is_resizing = False
-  //is_writing_config = False
-  //listen_mode = False
   gboolean listenMode;
   guint listenPort;
   GSocket * listenSocket;
   GSource * listenSource;
+  guint scanTimerSource;
 
   // important paths that probably shouldn't be hard-coded
   GString * appConfigDir;
   GString * appConfigFile;
   GString * appLogFile;
-
-  //# clipboard goodies
-  //clip = Gtk.Clipboard()
-  //server_clip = False
-  //client_clip = False
 
   // ssh stuff
   GString * sshCommand;
@@ -237,9 +237,11 @@ typedef struct ToolsMenuItems
   GtkWidget * addNew;
   GtkWidget * fullscreen;
   GtkWidget * listenMode;
+  GtkWidget * scanMode;
   GtkWidget * screenshot;
   GtkWidget * appOptions;
   GtkWidget * quit;
+  GtkWidget * about;
 } ToolsMenuItems;
 
 typedef struct SendKeysObj
@@ -292,6 +294,7 @@ enum SendKeysObjectType
 
 /* functions */
 void svDoQuit ();
+void svCancelScanMode (gboolean);
 void svCreateGUI (GtkApplication *);
 void svConfigRead ();
 void svConfigWrite ();
@@ -307,17 +310,20 @@ gpointer svSSHMonitor (gpointer);
 GdkFilterReturn svEventFilter(GdkXEvent *, GdkEvent *, gpointer);
 gboolean svFocusOnce (gpointer);
 void svFreeConnObject(Connection *);
+gboolean svThereAreConnectedConnections ();
 Connection * svGetSelectedConnectionListConnection ();
-void svHandleAddNewConnectionMenuItem ();
+void svHandleAddNewConnectionMenuItem (GtkMenuItem *, gpointer);
 gboolean svHandleConnectionListClicks (GtkWidget *, GdkEvent *, void *);
 void svHandleConnectionSSHPrivKey (GtkButton *, gpointer);
 void svHandleDeleteMenuItem (GtkMenuItem *, gpointer);
+void svHandleFullscreenMenuItem (GtkMenuItem *, gpointer);
 void svHandleRequestUpdateMenuItem (GtkMenuItem *, gpointer);
+void svHandleScanModeMenuItem (GtkMenuItem *, gpointer);
 void svHandleSendCADMenuItem (GtkMenuItem *, gpointer);
 void svHandleSendCSEMenuItem (GtkMenuItem *, gpointer);
 void svHandleSendEnteredKeystrokesMenuItem (GtkMenuItem *, gpointer);
 void svHandleSendEnteredKeystrokesSend (GtkButton *, gpointer);
-void svHandleScreenshotMenuItem ();
+void svHandleScreenshotMenuItem (GtkMenuItem *, gpointer);
 void svInitAppVars ();
 void svInitConnObject (Connection *);
 void svInsertHostListRow (const char *, gint, Connection *);
@@ -331,8 +337,10 @@ void svSetTextFromConnectionName (const char *, const char *);
 void svSetToolsMenuItems(gboolean);
 void svSetTooltip(GtkWidget *, const char *);
 void svSetMenuItemTooltips ();
+void svShowAboutWindow ();
 void svShowAppOptionsWindow ();
 void svShowConnectionActionsWindow ();
+void svShowMessageDialog (const char *);
 gpointer svSSHConnectionCloser (gpointer);
 void svStartConnection (Connection *);
 gboolean svStringToBool (const char *);

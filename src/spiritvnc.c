@@ -66,6 +66,24 @@ void svLog (const char * strIn, gboolean skipStdOut)
 }
 
 
+/* generic message dialog */
+void svShowMessageDialog (const char * messageText)
+{
+  GtkWidget * dlg = gtk_message_dialog_new_with_markup(GTK_WINDOW(app->mainWin),
+                                           GTK_DIALOG_DESTROY_WITH_PARENT,
+                                           GTK_MESSAGE_WARNING,
+                                           GTK_BUTTONS_OK,
+                                           NULL);
+
+  gtk_message_dialog_set_markup(GTK_MESSAGE_DIALOG(dlg), messageText);
+
+  gtk_dialog_run(GTK_DIALOG(dlg));
+  gtk_widget_destroy(dlg);
+
+  //gtk_window_present(GTK_WINDOW(app->mainWin));  // <<<-- don't use this here, use after calling this function
+}
+
+
 /* convert string to gboolean */
 gboolean svStringToBool (const char * strIn)
 {
@@ -177,12 +195,13 @@ void svInitAppVars ()
   app->serverListWidthLast = app->serverListWidth;
   app->showTooltips = true;
   app->maximized = false;
+  app->fullscreen = false;
+  app->scanMode = false;
   app->logToFile = false;
   app->debugMode = false;
   app->scanTimeout = 3;
   app->vncConnectWaitTime = 10;
   app->addNewConnection = true;
-  app->inConfigWrite = false;
 
   // ssh stuff
   app->sshCommand = g_string_new(NULL);
@@ -192,6 +211,7 @@ void svInitAppVars ()
   //# flags, states and stuff
   app->listenMode = false;
   app->listenPort = 5500;
+  app->scanTimerSource = 0;
 
   // important paths
 
@@ -469,6 +489,9 @@ void svHandleAppOptionsSave (GtkButton * self, gpointer userData)
   // set or unset tooltips
   svSetMenuItemTooltips();
   svSetHostlistItemsTooltips();
+  svSetTooltip(app->listenImage, "Toggle listen mode");
+  svSetTooltip(app->scanImage, "Toggle scan mode");
+  svSetTooltip(app->addConnectionImage, "Add a new connection");
 
   // write out our config
   svConfigWrite();
@@ -510,14 +533,8 @@ void svHandleConnectionSettingsSave (GtkButton * self, gpointer userData)
   // if no connection name, warn user
   if (nameVal[0] == '\0')
   {
-    GtkWidget * dialog = gtk_message_dialog_new_with_markup(GTK_WINDOW(settings->settingsWin),
-                                    GTK_DIALOG_DESTROY_WITH_PARENT,
-                                    GTK_MESSAGE_ERROR,
-                                    GTK_BUTTONS_CLOSE,
-                                    "<b>'Connection name' cannot be empty</b>\n\nPlease enter a "
+    svShowMessageDialog("<b>'Connection name' cannot be empty</b>\n\nPlease enter a "
                                       "connection name then try saving again");
-    gtk_dialog_run(GTK_DIALOG(dialog));
-    gtk_widget_destroy(dialog);
 
     gtk_window_present(GTK_WINDOW(settings->settingsWin));
 
@@ -530,14 +547,8 @@ void svHandleConnectionSettingsSave (GtkButton * self, gpointer userData)
   // if no host address, warn user
   if (addressVal[0] == '\0')
   {
-    GtkWidget * dialog = gtk_message_dialog_new_with_markup(GTK_WINDOW(settings->settingsWin),
-                                    GTK_DIALOG_DESTROY_WITH_PARENT,
-                                    GTK_MESSAGE_ERROR,
-                                    GTK_BUTTONS_CLOSE,
-                                    "<b>'Remote Address' cannot be empty</b>\n\nPlease enter a "
+    svShowMessageDialog("<b>'Remote Address' cannot be empty</b>\n\nPlease enter a "
                                       "valid remote address then try saving again");
-    gtk_dialog_run(GTK_DIALOG(dialog));
-    gtk_widget_destroy(dialog);
 
     gtk_window_present(GTK_WINDOW(settings->settingsWin));
 
@@ -1628,11 +1639,17 @@ void svHandleMainWinChange (GtkWidget * widget, GdkEventWindowState * event, gpo
   if (!widget || widget != app->mainWin)
     return;
 
-  // set app->maximized value based on window state
+  // set maximized value
   if (event->new_window_state & GDK_WINDOW_STATE_MAXIMIZED)
     app->maximized = true;
   else
     app->maximized = false;
+
+  // set fullscreen value
+  if (event->new_window_state & GDK_WINDOW_STATE_FULLSCREEN)
+    app->fullscreen = true;
+  else
+    app->fullscreen = false;
 }
 
 
@@ -1649,7 +1666,8 @@ void svSetMenuItemTooltips ()
   svSetTooltip(app->toolsItems->fullscreen, "Toggles app fullscreen mode");
   svSetTooltip(app->toolsItems->listenMode, "Toggles reverse VNC (listening) mode");
   svSetTooltip(app->toolsItems->screenshot, "Takes a screenshot of the remote host");
-  svSetTooltip(app->toolsItems->appOptions, "Displays the App Options window");
+  svSetTooltip(app->toolsItems->scanMode, "Toggles timed scan mode");
+  svSetTooltip(app->toolsItems->appOptions, "Displays the app preferences window");
   svSetTooltip(app->toolsItems->quit, "Closes all connections and quits the app");
 }
 
@@ -1727,7 +1745,14 @@ void svHandleListenModeMenuItem ()
   {
     // change listen mode tools menu item text
     gtk_menu_item_set_label(GTK_MENU_ITEM(app->toolsItems->listenMode), "Disable _listen mode");
-    gtk_window_set_title(GTK_WINDOW(app->mainWin), "SpiritVNC (Listen Mode)");
+    //gtk_window_set_title(GTK_WINDOW(app->mainWin), "SpiritVNC (Listen Mode)");
+
+    // change listen toolbutton to 'enabled' image
+    if (app->listenImage)
+    {
+      gtk_image_clear(GTK_IMAGE(app->listenImage));
+      gtk_image_set_from_resource(GTK_IMAGE(app->listenImage), "/com/spiritvnc/pngs/listen-enabled.png");
+    }
 
     // create listening socket
     app->listenSocket = g_socket_new(G_SOCKET_FAMILY_IPV4,
@@ -1752,6 +1777,13 @@ void svHandleListenModeMenuItem ()
     // change listen mode tools menu item text
     gtk_menu_item_set_label(GTK_MENU_ITEM(app->toolsItems->listenMode), "Enable _listen mode");
     gtk_window_set_title(GTK_WINDOW(app->mainWin), "SpiritVNC");
+
+    // change listen toolbutton to 'disabled' image
+    if (app->listenImage)
+    {
+      gtk_image_clear(GTK_IMAGE(app->listenImage));
+      gtk_image_set_from_resource(GTK_IMAGE(app->listenImage), "/com/spiritvnc/pngs/listen-disabled.png");
+    }
 
     if (app->listenSource)
     {
@@ -1790,6 +1822,13 @@ void svCreateGUI (GtkApplication * gtkApp)
   gtk_window_set_title(GTK_WINDOW(app->mainWin), "SpiritVNC");
   gtk_window_set_default_size(GTK_WINDOW(app->mainWin), 1024, 720);
   g_signal_connect(app->mainWin, "delete-event", G_CALLBACK(svMainWinDeleteEvent), NULL);
+
+  // go bye-bye if we can't even make the main window
+  if (!app->mainWin)
+  {
+    svLog("SpiritVNC-GTK: Fatal error - main window is NULL. Terminating program", false);
+    exit(-1);
+  }
 
   // window icon
   GdkPixbuf * appIcon = gdk_pixbuf_new_from_resource("/com/spiritvnc/pngs/spiritvnc.png", NULL);
@@ -1851,7 +1890,7 @@ void svCreateGUI (GtkApplication * gtkApp)
   g_signal_connect(sks, "activate", G_CALLBACK(svHandleSendEnteredKeystrokesMenuItem), NULL);
 
   // send ctrl+alt+del
-  GtkWidget * cad = gtk_menu_item_new_with_label("_Ctrl+Alt+Del");
+  GtkWidget * cad = gtk_menu_item_new_with_label("Ctrl+_Alt+Del");
   app->toolsItems->sendCAD = cad;
   gtk_menu_item_set_use_underline(GTK_MENU_ITEM(cad), true);
   gtk_widget_set_sensitive(GTK_WIDGET(cad), false);
@@ -1859,7 +1898,7 @@ void svCreateGUI (GtkApplication * gtkApp)
   g_signal_connect(cad, "activate", G_CALLBACK(svHandleSendCADMenuItem), NULL);
 
   // send ctrl+shift+esc
-  GtkWidget * cse = gtk_menu_item_new_with_label("_Ctrl+Shift+Esc");
+  GtkWidget * cse = gtk_menu_item_new_with_label("Ctrl+Shift+_Esc");
   app->toolsItems->sendCSE = cse;
   gtk_menu_item_set_use_underline(GTK_MENU_ITEM(cse), true);
   gtk_widget_set_sensitive(GTK_WIDGET(cse), false);
@@ -1867,6 +1906,34 @@ void svCreateGUI (GtkApplication * gtkApp)
   g_signal_connect(cse, "activate", G_CALLBACK(svHandleSendCSEMenuItem), NULL);
 
   // ********* end of 'send' submenu ****************
+
+  // screenshot
+  GtkWidget * scr = gtk_menu_item_new_with_label("_Screenshot");
+  app->toolsItems->screenshot = scr;
+  gtk_menu_item_set_use_underline(GTK_MENU_ITEM(scr), true);
+  gtk_widget_set_sensitive(GTK_WIDGET(scr), false);
+  gtk_menu_shell_append(GTK_MENU_SHELL(submenu), scr);
+  g_signal_connect(scr, "activate", G_CALLBACK(svHandleScreenshotMenuItem), NULL);
+
+  gtk_menu_shell_append(GTK_MENU_SHELL(submenu), gtk_separator_menu_item_new());
+
+  // ********** end of connection-centric stuff
+
+  // listen mode
+  GtkWidget * lis = gtk_menu_item_new_with_label("Enable _listen mode");
+  app->toolsItems->listenMode = lis;
+  gtk_menu_item_set_use_underline(GTK_MENU_ITEM(lis), true);
+  gtk_widget_set_sensitive(GTK_WIDGET(lis), true);
+  gtk_menu_shell_append(GTK_MENU_SHELL(submenu), lis);
+  g_signal_connect(lis, "activate", G_CALLBACK(svHandleListenModeMenuItem), NULL);
+
+  // scan mode
+  GtkWidget * scn = gtk_menu_item_new_with_label("Enable scan _mode");
+  app->toolsItems->scanMode = scn;
+  gtk_menu_item_set_use_underline(GTK_MENU_ITEM(scn), true);
+  gtk_widget_set_sensitive(GTK_WIDGET(scn), true);
+  gtk_menu_shell_append(GTK_MENU_SHELL(submenu), scn);
+  g_signal_connect(scn, "activate", G_CALLBACK(svHandleScanModeMenuItem), NULL);
 
   // add new
   GtkWidget * add = gtk_menu_item_new_with_label("Add _new connection...");
@@ -1879,28 +1946,15 @@ void svCreateGUI (GtkApplication * gtkApp)
   GtkWidget * ful = gtk_menu_item_new_with_label("Toggle _fullscreen");
   app->toolsItems->fullscreen = ful;
   gtk_menu_item_set_use_underline(GTK_MENU_ITEM(ful), true);
-  gtk_widget_set_sensitive(GTK_WIDGET(ful), false);
+  gtk_widget_set_sensitive(GTK_WIDGET(ful), true);
   gtk_menu_shell_append(GTK_MENU_SHELL(submenu), ful);
-  //g_signal_connect(ful, "activate", G_CALLBACK(svDoQuit), NULL);
+  g_signal_connect(ful, "activate", G_CALLBACK(svHandleFullscreenMenuItem), NULL);
 
-  // listen mode
-  GtkWidget * lis = gtk_menu_item_new_with_label("Enable _listen mode");
-  app->toolsItems->listenMode = lis;
-  gtk_menu_item_set_use_underline(GTK_MENU_ITEM(lis), true);
-  gtk_widget_set_sensitive(GTK_WIDGET(lis), true);
-  gtk_menu_shell_append(GTK_MENU_SHELL(submenu), lis);
-  g_signal_connect(lis, "activate", G_CALLBACK(svHandleListenModeMenuItem), NULL);
-
-  // screenshot
-  GtkWidget * scr = gtk_menu_item_new_with_label("_Screenshot");
-  app->toolsItems->screenshot = scr;
-  gtk_menu_item_set_use_underline(GTK_MENU_ITEM(scr), true);
-  gtk_widget_set_sensitive(GTK_WIDGET(scr), false);
-  gtk_menu_shell_append(GTK_MENU_SHELL(submenu), scr);
-  g_signal_connect(scr, "activate", G_CALLBACK(svHandleScreenshotMenuItem), NULL);
+  gtk_menu_shell_append(GTK_MENU_SHELL(submenu), gtk_separator_menu_item_new());
+  // ******* end of operations-centric stuff
 
   // app options
-  GtkWidget * ao = gtk_menu_item_new_with_label("_App options");
+  GtkWidget * ao = gtk_menu_item_new_with_label("_Preferences");
   app->toolsItems->appOptions = ao;
   gtk_menu_item_set_use_underline(GTK_MENU_ITEM(ao), true);
   gtk_menu_shell_append(GTK_MENU_SHELL(submenu), ao);
@@ -1920,6 +1974,24 @@ void svCreateGUI (GtkApplication * gtkApp)
 
   // ################ TOOLS MENU - END #######################
 
+  // help top menu
+  GtkWidget * help = gtk_menu_item_new_with_label("_Help");
+  gtk_menu_item_set_use_underline(GTK_MENU_ITEM(help), true);
+  gtk_widget_set_sensitive(GTK_WIDGET(help), true);
+  gtk_menu_shell_append(GTK_MENU_SHELL(app->menuBar), help);
+
+  GtkWidget * helpSub = gtk_menu_new();
+
+  // about
+  GtkWidget * abt = gtk_menu_item_new_with_label("_About");
+  app->toolsItems->about = abt;
+  gtk_menu_item_set_use_underline(GTK_MENU_ITEM(abt), true);
+  gtk_menu_shell_append(GTK_MENU_SHELL(helpSub), abt);
+  g_signal_connect(abt, "activate", G_CALLBACK(svShowAboutWindow), NULL);
+
+  // add submenu to help
+  gtk_menu_item_set_submenu(GTK_MENU_ITEM(help), helpSub);
+
   // ################# PANES - START #################
 
   // server list -- nearly the heart of the program
@@ -1930,9 +2002,6 @@ void svCreateGUI (GtkApplication * gtkApp)
 
   // read in the config file and fill the connection listbox + glist
   svConfigRead();
-
-  // set the left pane width
-  //gtk_paned_set_position(GTK_PANED(app->parent), app->serverListWidth);
 
   gtk_list_box_unselect_all(GTK_LIST_BOX(app->serverList));
 
@@ -1946,6 +2015,36 @@ void svCreateGUI (GtkApplication * gtkApp)
 
   // pack menu-bar and server list into leftBox
   gtk_box_pack_start(GTK_BOX(leftBox), app->menuBar, false, false, 0);
+
+  // ############# toolbar area ###################################################
+  GtkWidget * toolBar = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 5);
+  gtk_box_pack_start(GTK_BOX(leftBox), toolBar, false, false, 2);
+
+  // listen toolbutton
+  app->toolbuttonListen = gtk_event_box_new();
+  g_signal_connect(G_OBJECT(app->toolbuttonListen), "button-press-event", G_CALLBACK(svHandleListenModeMenuItem), NULL);
+  app->listenImage = gtk_image_new_from_resource("/com/spiritvnc/pngs/listen-disabled.png");
+  svSetTooltip(app->listenImage, "Toggle listen mode");
+  gtk_container_add(GTK_CONTAINER(app->toolbuttonListen), app->listenImage);
+  gtk_box_pack_start(GTK_BOX(toolBar), app->toolbuttonListen, false, false, 3);
+
+  // scan toolbutton
+  app->toolbuttonScan = gtk_event_box_new();
+  g_signal_connect(G_OBJECT(app->toolbuttonScan), "button-press-event", G_CALLBACK(svHandleScanModeMenuItem), NULL);
+  app->scanImage = gtk_image_new_from_resource("/com/spiritvnc/pngs/scan-disabled.png");
+  svSetTooltip(app->scanImage, "Toggle scan mode");
+  gtk_container_add(GTK_CONTAINER(app->toolbuttonScan), app->scanImage);
+  gtk_box_pack_start(GTK_BOX(toolBar), app->toolbuttonScan, false, false, 3);
+
+  // add connection toolbutton
+  app->addConnectionToolbutton = gtk_event_box_new();
+  g_signal_connect(G_OBJECT(app->addConnectionToolbutton), "button-press-event", G_CALLBACK(svHandleAddNewConnectionMenuItem), NULL);
+  app->addConnectionImage = gtk_image_new_from_resource("/com/spiritvnc/pngs/add-connection.png");
+  svSetTooltip(app->addConnectionImage, "Add a new connection");
+  gtk_container_add(GTK_CONTAINER(app->addConnectionToolbutton), app->addConnectionImage);
+  gtk_box_pack_start(GTK_BOX(toolBar), app->addConnectionToolbutton, false, false, 3);
+
+  // ############# toolbar area end ###################################################
 
   // scrollable parent for server list
   app->serverListScroller = gtk_scrolled_window_new(NULL, NULL);
@@ -2434,17 +2533,21 @@ void svConfigRead ()
 void svConfigWrite ()
 {
   // no re-entrance
-  if (app->inConfigWrite)
+  static gboolean inConfigWrite = false;
+
+  if (inConfigWrite)
     return;
 
+  // set non-re-entrance flag
+  inConfigWrite = true;
+
+  // if it's not possible to create a config directory, get out
   if (!svConfigCreateNew(false))
   {
     svLog("svConfigWrite - Could not create new config dirs or file", false);
+    inConfigWrite = false;
     return;
   }
-
-  // set non-re-entrance flag
-  app->inConfigWrite = true;
 
   GString * outStr = g_string_new(NULL);
 
@@ -2544,7 +2647,7 @@ void svConfigWrite ()
   g_string_free(outStr, true);
 
   // set no-re-entrance flag
-  app->inConfigWrite = false;
+  inConfigWrite = false;
 }
 
 
@@ -3318,7 +3421,7 @@ void svHandleDeleteMenuItem (GtkMenuItem * gMenuItem, gpointer userData)
 
 
 /* menu item handler - add new connection */
-void svHandleAddNewConnectionMenuItem ()
+void svHandleAddNewConnectionMenuItem (GtkMenuItem * unused1, gpointer unused2)
 {
   app->addNewConnection = true;
 
@@ -3326,8 +3429,190 @@ void svHandleAddNewConnectionMenuItem ()
 }
 
 
+/* menu item handler - toggle fullscreen */
+void svHandleFullscreenMenuItem (GtkMenuItem * unused1, gpointer unused2)
+{
+  // if fullscreen, unfullscreen and vice-versa
+  if (app->fullscreen)
+    gtk_window_unfullscreen(GTK_WINDOW(app->mainWin));
+  else
+    gtk_window_fullscreen(GTK_WINDOW(app->mainWin));
+}
+
+
+/* check for connected connections */
+gboolean svThereAreConnectedConnections ()
+{
+  gboolean result = false;
+
+  // go through connection listbox and return correct connection
+  GList * rows = gtk_container_get_children(GTK_CONTAINER(app->serverList));
+
+  for (GList * l = rows; l; l = l->next)
+  {
+    GtkListBoxRow * row = l->data;
+    GtkWidget * box = gtk_bin_get_child(GTK_BIN(row));
+
+    // if there's a connected connection, return true
+    Connection * con = g_object_get_data(G_OBJECT(box), "con");
+    if (con && con->state == SV_STATE_CONNECTED)
+    {
+      result = true;
+      break;
+    }
+  }
+
+  g_list_free(rows);
+
+  return result;
+}
+
+
+/* scanMode - move to next connected connection on server list */
+gboolean svScanModeNextConnection (gpointer unused)
+{
+  // if there are no more connected connections, cancel scan mode
+  if (!svThereAreConnectedConnections())
+  {
+    // cancel scan mode
+    svCancelScanMode(false);
+
+    // tell user
+    svShowMessageDialog("There are no connected connections.\n\nScan mode terminated.");
+
+    gtk_window_present(GTK_WINDOW(app->mainWin));
+
+    return G_SOURCE_REMOVE;
+  }
+
+  // see if there's a selected connection
+  gint selectedIndex = -1;
+  gboolean looped = false;
+
+  GtkListBoxRow * selectedRow = gtk_list_box_get_selected_row(GTK_LIST_BOX(app->serverList));
+
+  // set selectedIndex if there is a selected row
+  if (selectedRow)
+    selectedIndex = gtk_list_box_row_get_index(selectedRow);
+
+  // go through connection listbox and select the next connected connection
+  GList * rows = gtk_container_get_children(GTK_CONTAINER(app->serverList));
+
+  for (GList * l = rows; l; l = l->next)
+  {
+    GtkListBoxRow * row = l->data;
+    gint rowIndex = gtk_list_box_row_get_index(row);;
+    GtkWidget * box = gtk_bin_get_child(GTK_BIN(row));
+
+    // if there's a connected connection, return true
+    Connection * con = g_object_get_data(G_OBJECT(box), "con");
+    if (con && con->state == SV_STATE_CONNECTED)
+    {
+      // if nothing is selected, select the first connected connection
+      // in the list, otherwise select the next connected connection
+      if ((selectedIndex == -1) || (rowIndex > selectedIndex))
+      {
+        gtk_list_box_select_row(GTK_LIST_BOX(app->serverList), GTK_LIST_BOX_ROW(row));
+        svConnectionSwitch(con);
+        break;
+      }
+    }
+
+    // we've reached the end of the list, loop around
+    if (!l->next)
+    {
+      // get out if we've already looped, to prevent infinity loopage
+      if (looped)
+        break;
+
+      looped = true;
+
+      // reset selectedIndex so the first connected connection will be selected / switched to
+      selectedIndex = -1;
+
+      // set our iterator to the first row glist element
+      l = g_list_first(rows);
+
+      // if for some reason the first element is null, get out
+      if (!l)
+        break;
+    }
+  }
+
+  g_list_free(rows);
+
+  return G_SOURCE_CONTINUE;
+}
+
+
+void svCancelScanMode (gboolean removeSource)
+{
+  // cancel scan mode
+  app->scanMode = false;
+
+  // change listen mode tools menu item text
+  gtk_menu_item_set_label(GTK_MENU_ITEM(app->toolsItems->scanMode), "Enable sca_n mode");
+
+  // change listen toolbutton to 'enabled' image
+  if (app->listenImage)
+  {
+    gtk_image_clear(GTK_IMAGE(app->scanImage));
+    gtk_image_set_from_resource(GTK_IMAGE(app->scanImage), "/com/spiritvnc/pngs/scan-disabled.png");
+  }
+
+  // remove timer source
+  if (app->scanTimerSource > 0)
+  {
+    // only remove source if manually canceling scan mode
+    if (removeSource)
+      g_source_remove(app->scanTimerSource);
+
+    app->scanTimerSource = 0;
+  }
+}
+
+/* menu item handler - toggle scan mode */
+void svHandleScanModeMenuItem (GtkMenuItem * unused1, gpointer unused2)
+{
+  // toggle scan mode
+  app->scanMode = !app->scanMode;
+
+  if (app->scanMode)
+  {
+    // start scan mode if there's any connected connections
+    if (svThereAreConnectedConnections())
+    {
+      // change listen mode tools menu item text
+      gtk_menu_item_set_label(GTK_MENU_ITEM(app->toolsItems->scanMode), "Disable sca_n mode");
+
+      // change listen toolbutton to 'enabled' image
+      if (app->listenImage)
+      {
+        gtk_image_clear(GTK_IMAGE(app->scanImage));
+        gtk_image_set_from_resource(GTK_IMAGE(app->scanImage), "/com/spiritvnc/pngs/scan-enabled.png");
+      }
+
+      // start scan timer
+      app->scanTimerSource = g_timeout_add_seconds(app->scanTimeout, svScanModeNextConnection, NULL);
+    }
+    else
+    {
+      // let user know there's no connected connections
+      svShowMessageDialog("There are no connected connections.\n\nScan mode not started.");
+
+      gtk_window_present(GTK_WINDOW(app->mainWin));
+
+      // cancel scan mode
+      svCancelScanMode(true);
+    }
+  }
+  else
+    // cancel scan mode
+    svCancelScanMode(true);
+}
+
 /* menu item handler - do screenshot of current vnc connection */
-void svHandleScreenshotMenuItem ()
+void svHandleScreenshotMenuItem (GtkMenuItem * unused1, gpointer unused2)
 {
   Connection * con = svGetSelectedConnectionListConnection();
   if (!con)
@@ -3341,7 +3626,6 @@ void svHandleScreenshotMenuItem ()
   GtkFileChooser * chooser;
   GtkFileChooserAction action = GTK_FILE_CHOOSER_ACTION_SAVE;
   gint res;
-  char existingFilename[FILENAME_MAX] = {0};
 
   // get the current time
   GDateTime * now = g_date_time_new_now_local();
@@ -3349,7 +3633,8 @@ void svHandleScreenshotMenuItem ()
   // format the time as a human-readable string
   char * formattedTime = g_date_time_format(now, "%Y-%m-%d--%H-%M-%S");  // <<<--- do NOT make const char *
 
-  snprintf(existingFilename, 60, "spiritvnc-screenshot-%s.png", formattedTime);
+  GString * existingFilename = g_string_new(NULL);
+  g_string_printf(existingFilename, "spiritvnc-screenshot-%s.png", formattedTime);
 
   // free resources
   g_free(formattedTime);
@@ -3366,7 +3651,8 @@ void svHandleScreenshotMenuItem ()
   chooser = GTK_FILE_CHOOSER(dialog);
 
   gtk_file_chooser_set_do_overwrite_confirmation(chooser, true);
-  gtk_file_chooser_set_current_name(chooser, existingFilename);
+  gtk_file_chooser_set_current_name(chooser, existingFilename->str);
+  g_string_free(existingFilename, true);
 
   res = gtk_dialog_run(GTK_DIALOG(dialog));
 
@@ -3754,9 +4040,15 @@ void svServerInitialized (GtkWidget * vncObj)
   if (selectedRowText && strcmp(con->name->str, selectedRowText) == 0)
   {
     // set 'last connected' label text
-    char strTime[50] = {0};
-    snprintf(strTime, 49, "Last connected: %s", con->lastConnectTime->str);
-    gtk_label_set_text(GTK_LABEL(app->quickNoteLastConnected), strTime);
+    if (con->lastConnectTime->len > 0)
+    {
+      GString * strTime = g_string_new(NULL);
+      g_string_printf(strTime, "Last connected: %s", con->lastConnectTime->str);
+      gtk_label_set_text(GTK_LABEL(app->quickNoteLastConnected), strTime->str);
+      g_string_free(strTime, true);
+    }
+    else
+      gtk_label_set_text(GTK_LABEL(app->quickNoteLastConnected), "-");
 
     // show the remote server screen
     gtk_widget_show(vncObj);
@@ -3960,7 +4252,7 @@ gboolean svHandleKeyboard (GtkWidget * widget, GdkEventKey * event, gpointer dat
     if (!con || con->name->len == 0 || con->state != SV_STATE_CONNECTED)
       return false;
 
-    svHandleScreenshotMenuItem();
+    svHandleScreenshotMenuItem(NULL, NULL);
     return true;
   }
 
@@ -4263,6 +4555,14 @@ void svConnectionSwitch (Connection * con)
 {
   // ***### DO NOT CHECK CON FOR NULL HERE!!! ###***
 
+  // no re-entry
+  static gboolean inConnectionSwitch = false;
+
+  if (inConnectionSwitch)
+    return;
+
+  inConnectionSwitch = true;
+
   // disable tools menu items initially
   svSetToolsMenuItems(false);
 
@@ -4277,6 +4577,10 @@ void svConnectionSwitch (Connection * con)
     gtk_label_set_text(GTK_LABEL(app->quickNoteLastConnected), "-");
     gtk_text_buffer_set_text(app->quickNoteLastErrorBuffer, "", -1);
     gtk_text_buffer_set_text(app->quickNoteBuffer, "", -1);
+
+    inConnectionSwitch = false;
+
+    return;
   }
   else
   {
@@ -4288,9 +4592,17 @@ void svConnectionSwitch (Connection * con)
 
     // fill quicknote label, last error text and quicknote text
     gtk_label_set_text(GTK_LABEL(app->quickNoteLabel), con->name->str);
-    char strTime[50] = {0};
-    snprintf(strTime, 49, "Last connected: %s", con->lastConnectTime->str);
-    gtk_label_set_text(GTK_LABEL(app->quickNoteLastConnected), strTime);
+
+    if (con->lastConnectTime->len > 0)
+    {
+      GString * strTime = g_string_new(NULL);
+      g_string_printf(strTime, "Last connected: %s", con->lastConnectTime->str);
+      gtk_label_set_text(GTK_LABEL(app->quickNoteLastConnected), strTime->str);
+      g_string_free(strTime, true);
+    }
+    else
+      gtk_label_set_text(GTK_LABEL(app->quickNoteLastConnected), "-");
+
     gtk_text_buffer_set_text(app->quickNoteLastErrorBuffer, con->lastErrorMessage->str, -1);
 
     gsize outLen = 0;
@@ -4328,6 +4640,8 @@ void svConnectionSwitch (Connection * con)
       svSetToolsMenuItems(true);
     }
   }
+
+  inConnectionSwitch = false;
 }
 
 
@@ -4373,11 +4687,12 @@ void svConnectionOpen (Connection * con)
     case SV_TYPE_VNC_OVER_SSH:
     {
       // set up local port string
-      char localPortStr[10] = {0};
-      snprintf(localPortStr, 9, "%ui", con->sshLocalPort);
+      GString * localPortStr = g_string_new(NULL);
+      g_string_printf(localPortStr, "%ui", con->sshLocalPort);
 
       // connect vnc obj to local forwarded port
-      vnc_display_open_host(VNC_DISPLAY(con->vncObj), "127.0.0.1", localPortStr);
+      vnc_display_open_host(VNC_DISPLAY(con->vncObj), "127.0.0.1", localPortStr->str);
+      g_string_free(localPortStr, true);
       break;
     }
 
@@ -4390,18 +4705,44 @@ void svConnectionOpen (Connection * con)
 
 
 /* show error message about null con fields */
-void svShowNullConFieldsDialog (gpointer data)
+void svShowNullConFieldsDialog (gpointer unused)
 {
-  GtkWidget * dlg = gtk_message_dialog_new(GTK_WINDOW(app->mainWin),
-                                           GTK_DIALOG_DESTROY_WITH_PARENT,
-                                           GTK_MESSAGE_WARNING,
-                                           GTK_BUTTONS_OK,
-                                           "%s",
-                                           "One more more connection properties were NULL or invalid when attempting a SSH connection");
+  svShowMessageDialog("One more more connection properties were NULL or invalid when attempting a SSH connection");
 
-  gtk_dialog_run(GTK_DIALOG(dlg));
-  gtk_widget_destroy(dlg);
+  gtk_window_present(GTK_WINDOW(app->mainWin));
+}
 
+
+/* show about window */
+void svShowAboutWindow ()
+{
+  GdkPixbuf * aboutImage = gdk_pixbuf_new_from_resource("/com/spiritvnc/pngs/spiritvnc.png", NULL);
+  if (!aboutImage)
+    return;
+
+  GtkWidget * aboutDialog = gtk_about_dialog_new();
+  const char * authors[] = {"Will Brokenbourgh", NULL};
+
+  // set about dialog properties
+  gtk_about_dialog_set_program_name(GTK_ABOUT_DIALOG(aboutDialog), "SpiritVNC-GTK");
+  gtk_about_dialog_set_logo(GTK_ABOUT_DIALOG(aboutDialog), aboutImage);
+  gtk_about_dialog_set_version(GTK_ABOUT_DIALOG(aboutDialog), SV_APP_VERSION);
+  gtk_about_dialog_set_authors(GTK_ABOUT_DIALOG(aboutDialog), authors);
+  //gtk_about_dialog_set_website(GTK_ABOUT_DIALOG(aboutDialog), "https://www.willbrokenbourgh.com/brainout/");
+  //gtk_about_dialog_set_website_label(GTK_ABOUT_DIALOG(aboutDialog), "Will Brokenbourgh");
+  gtk_about_dialog_set_license(GTK_ABOUT_DIALOG(aboutDialog), "SpiritVNC is released under a BSD 3-Clause license");
+  gtk_about_dialog_set_comments(GTK_ABOUT_DIALOG(aboutDialog), "A multi-connection VNC viewer for Unix-like, macOS and "
+    "Windows systems");
+
+  // set window properties
+  gtk_window_set_transient_for(GTK_WINDOW(aboutDialog), GTK_WINDOW(app->mainWin));
+  gtk_window_set_position(GTK_WINDOW(aboutDialog), GTK_WIN_POS_CENTER_ON_PARENT);
+
+  // show the dialog then destroy afterwards
+  gtk_dialog_run(GTK_DIALOG(aboutDialog));
+  gtk_widget_destroy(aboutDialog);
+
+  // focus the main window when done
   gtk_window_present(GTK_WINDOW(app->mainWin));
 }
 
@@ -4631,6 +4972,18 @@ gpointer svCreateSSHConnection (gpointer data)
   return NULL;
 }
 
+/* handle mac menu bar 'quit' action */
+void svAppMenuAboutAction (GSimpleAction * action, GVariant * parameter, gpointer user_data)
+{
+  svShowAboutWindow();
+}
+
+
+/* handle mac menu bar 'quit' action */
+void svAppMenuSettingsAction (GSimpleAction * action, GVariant * parameter, gpointer user_data)
+{
+  svShowAppOptionsWindow();
+}
 
 /* handle mac menu bar 'quit' action */
 void svAppMenuQuitAction (GSimpleAction * action, GVariant * parameter, gpointer user_data)
@@ -4660,6 +5013,8 @@ gint main (gint argc, char ** argv)
   // set application stuffs
   app->gApp = gtk_application_new ("org.will.brokenbourgh", G_APPLICATION_DEFAULT_FLAGS);
   const GActionEntry app_actions[] = {
+    {"about", svAppMenuAboutAction, NULL, NULL, NULL},
+    {"preferences", svAppMenuSettingsAction, NULL, NULL, NULL},
     {"quit", svAppMenuQuitAction, NULL, NULL, NULL}
   };
 
