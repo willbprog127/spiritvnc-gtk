@@ -545,7 +545,7 @@ void svHandleConnectionSettingsSave (GtkButton * self, gpointer userData)
   }
 
   // if no host address, warn user
-  if (addressVal[0] == '\0')
+  if (addressVal[0] == '\0' && con->type != SV_TYPE_VNC_REVERSE)
   {
     svShowMessageDialog("<b>'Remote Address' cannot be empty</b>\n\nPlease enter a "
                                       "valid remote address then try saving again");
@@ -2015,6 +2015,7 @@ void svCreateGUI (GtkApplication * gtkApp)
 
   // pack menu-bar and server list into leftBox
   gtk_box_pack_start(GTK_BOX(leftBox), app->menuBar, false, false, 0);
+  //gtk_container_add(GTK_CONTAINER(app->mainWin), app->menuBar);
 
   // ############# toolbar area ###################################################
   GtkWidget * toolBar = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 5);
@@ -3504,7 +3505,7 @@ gboolean svScanModeNextConnection (gpointer unused)
     gint rowIndex = gtk_list_box_row_get_index(row);;
     GtkWidget * box = gtk_bin_get_child(GTK_BIN(row));
 
-    // if there's a connected connection, return true
+    // if this is a connected connection, process it
     Connection * con = g_object_get_data(G_OBJECT(box), "con");
     if (con && con->state == SV_STATE_CONNECTED)
     {
