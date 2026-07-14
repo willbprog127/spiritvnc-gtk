@@ -544,7 +544,7 @@ void svHandleConnectionSettingsSave (GtkButton * self, gpointer userData)
     return;
   }
 
-  // if no host address, warn user
+  // if no host address, warn user (if not a reverse / listening connection)
   if (addressVal[0] == '\0' && con->type != SV_TYPE_VNC_REVERSE)
   {
     svShowMessageDialog("<b>'Remote Address' cannot be empty</b>\n\nPlease enter a "
@@ -1840,11 +1840,11 @@ void svCreateGUI (GtkApplication * gtkApp)
 
   gtk_window_set_application(GTK_WINDOW(app->mainWin), GTK_APPLICATION(gtkApp));
 
-  // parent paned to hold server list and viewer
+  // ############### PARENT PANE ###########################################
   app->parent = gtk_paned_new(GTK_ORIENTATION_HORIZONTAL);
   gtk_container_add(GTK_CONTAINER(app->mainWin), app->parent);
 
-  // ################ TOOLS MENU - START #######################
+  // ************** tools menu - start **************************
 
   // tools menubar
   app->menuBar = gtk_menu_bar_new();
@@ -1866,7 +1866,7 @@ void svCreateGUI (GtkApplication * gtkApp)
   gtk_menu_shell_append(GTK_MENU_SHELL(submenu), upd);
   g_signal_connect(upd, "activate", G_CALLBACK(svHandleRequestUpdateMenuItem), NULL);
 
-  // ************ begin 'send' submenu *****************************
+  // *** begin 'send' submenu ***
 
   // send submenu
   GtkWidget * ssm = gtk_menu_item_new_with_label("Send...");
@@ -1905,7 +1905,7 @@ void svCreateGUI (GtkApplication * gtkApp)
   gtk_menu_shell_append(GTK_MENU_SHELL(sendMen), cse);
   g_signal_connect(cse, "activate", G_CALLBACK(svHandleSendCSEMenuItem), NULL);
 
-  // ********* end of 'send' submenu ****************
+  // *** end of 'send' submenu ***
 
   // screenshot
   GtkWidget * scr = gtk_menu_item_new_with_label("_Screenshot");
@@ -1917,7 +1917,7 @@ void svCreateGUI (GtkApplication * gtkApp)
 
   gtk_menu_shell_append(GTK_MENU_SHELL(submenu), gtk_separator_menu_item_new());
 
-  // ********** end of connection-centric stuff
+  // *** end of connection-centric stuff ***
 
   // listen mode
   GtkWidget * lis = gtk_menu_item_new_with_label("Enable _listen mode");
@@ -1951,7 +1951,7 @@ void svCreateGUI (GtkApplication * gtkApp)
   g_signal_connect(ful, "activate", G_CALLBACK(svHandleFullscreenMenuItem), NULL);
 
   gtk_menu_shell_append(GTK_MENU_SHELL(submenu), gtk_separator_menu_item_new());
-  // ******* end of operations-centric stuff
+  // *** end of operations-centric stuff ***
 
   // app options
   GtkWidget * ao = gtk_menu_item_new_with_label("_Preferences");
@@ -2063,6 +2063,7 @@ void svCreateGUI (GtkApplication * gtkApp)
   gtk_widget_set_halign(app->quickNoteLabel, GTK_ALIGN_START);
   gtk_widget_set_margin_start(app->quickNoteLabel, 3);
   gtk_widget_set_margin_top(app->quickNoteLabel, 7);
+  gtk_label_set_ellipsize(GTK_LABEL(app->quickNoteLabel), PANGO_ELLIPSIZE_END);
   // pack quicknote label in leftBox
   gtk_box_pack_start(GTK_BOX(leftBox), app->quickNoteLabel, false, false, 0);
 
