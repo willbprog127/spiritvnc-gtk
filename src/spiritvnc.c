@@ -1441,7 +1441,7 @@ void svShowConnectionEditWindow (Connection * con)
   GtkWidget * btnSSHPrivKey = gtk_button_new_with_label("...");
   if (preventConnectedEditing)
     gtk_widget_set_sensitive(GTK_WIDGET(btnSSHPrivKey), false);
-  g_signal_connect(btnSSHPrivKey, "clicked", G_CALLBACK(svHandleConnectionSSHPrivKey), settings->sshPrivateKey);
+  g_signal_connect(btnSSHPrivKey, "clicked", G_CALLBACK(svHandleConnectionSSHPrivKey), settings);
   svSetTooltip(btnSSHPrivKey, "Click to select a private key for the remote host's SSH server");
 
   gtk_grid_attach(GTK_GRID(sshPage), lblSSHPrivKey, 1, 4, 1, 1);
@@ -4702,7 +4702,7 @@ void svConnectionOpen (Connection * con)
       return;
   }
 
-  // vnc display is added to the stack in 'svServerInitialized' method
+  // INFO - vnc display is added to the stack in 'svServerInitialized' method
 }
 
 
@@ -4831,7 +4831,6 @@ gpointer svCreateSSHConnection (gpointer data)
     g_free(stdOut);
     g_free(stdErr);
 
-    //printf("DEBUG: svCreateSSHConnection - readError pointer = %p\n", (void *)gError);
     g_error_free(gSSHCheckError);
 
     return NULL;
@@ -4871,10 +4870,12 @@ gpointer svCreateSSHConnection (gpointer data)
   g_string_printf(fwd, "%i:127.0.0.1:%s", con->sshLocalPort, con->vncPort->str);
   char * localForwardString = fwd->str;
 
+  // TODO: Include -i parameter only if there's a private key file set
+
   // build argv array for SSH
   char * sshArgv[] =
   {
-    app->sshCommand->str,          // "ssh"
+    app->sshCommand->str,  // "/usr/bin/ssh", etc
     "-t",
     "-t",
     "-p", con->sshPort->str,
@@ -4895,7 +4896,7 @@ gpointer svCreateSSHConnection (gpointer data)
                   NULL,
                   sshArgv,               // SSH command array
                   NULL,
-                  G_SPAWN_DO_NOT_REAP_CHILD,
+                  G_SPAWN_DEFAULT, //G_SPAWN_DO_NOT_REAP_CHILD,
                   NULL,
                   NULL,
                   &pid,
