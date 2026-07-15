@@ -4690,7 +4690,7 @@ void svConnectionOpen (Connection * con)
     {
       // set up local port string
       GString * localPortStr = g_string_new(NULL);
-      g_string_printf(localPortStr, "%ui", con->sshLocalPort);
+      g_string_printf(localPortStr, "%u", con->sshLocalPort);
 
       // connect vnc obj to local forwarded port
       vnc_display_open_host(VNC_DISPLAY(con->vncObj), "127.0.0.1", localPortStr->str);
@@ -4805,7 +4805,7 @@ gpointer svCreateSSHConnection (gpointer data)
   if (gSSHCheckError)
   {
     // problemos
-    printf("ssh error - gError code: %i, gError message: %s\n", gSSHCheckError->code, gSSHCheckError->message);
+    //printf("ssh error - gError code: %i, gError message: %s\n", gSSHCheckError->code, gSSHCheckError->message);
     //printf("ssh error - exitStatus: %i, stdErr: %s\n", exitStatus, stdErr);
 
     // log error
@@ -4893,7 +4893,7 @@ gpointer svCreateSSHConnection (gpointer data)
   // attempt to call the system's ssh client and open write stream
   gboolean sshRunOkay = g_spawn_async_with_pipes(
                   NULL,
-                  sshArgv,               // parsed SSH command
+                  sshArgv,               // SSH command array
                   NULL,
                   G_SPAWN_DO_NOT_REAP_CHILD,
                   NULL,
