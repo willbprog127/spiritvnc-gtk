@@ -88,7 +88,7 @@ void svShowMessageDialog (const char * messageText)
 gboolean svStringToBool (const char * strIn)
 {
   if (!strIn)
-    return FALSE;
+    return false;
 
   char * strLow = g_utf8_strdown(strIn, -1);  //  <<<--- NO const char *
 
@@ -273,7 +273,6 @@ void svInitConnObject (Connection * con)
   con->sshThread = NULL;
   con->sshMonitorThread = NULL;
   con->sshContinue = false;
-  con->sshStream = NULL;
   con->sshStdIn = -1;
   con->clipboard = g_string_new(NULL);
 }
@@ -3456,7 +3455,7 @@ gboolean svThereAreConnectedConnections ()
     GtkWidget * box = gtk_bin_get_child(GTK_BIN(row));
 
     // if there's a connected connection, return true
-    Connection * con = g_object_get_data(G_OBJECT(box), "con");
+    const Connection * con = g_object_get_data(G_OBJECT(box), "con");
     if (con && con->state == SV_STATE_CONNECTED)
     {
       result = true;
@@ -4407,7 +4406,7 @@ void svSetSSHLastErrorMessage (gpointer data)
 /* set error icon from ssh error */
 void svSetConnectionIconFromSSHError (gpointer data)
 {
-  Connection * con = (Connection *)data;
+  const Connection * con = (Connection *)data;
   if (!con)
     return;
 
@@ -4475,7 +4474,7 @@ gpointer svSSHConnectionCloser (gpointer data)
 {
   Connection * con = (Connection *)data;
 
-  if (!con || !con->sshStream)
+  if (!con || !con->sshStdIn)
     return NULL;
 
   // log
@@ -4485,13 +4484,12 @@ gpointer svSSHConnectionCloser (gpointer data)
   g_string_free(logStr, true);
 
   // send 'exit' and 'exit' control-char sequence
-  fputs("\r\n", con->sshStream);
-  fputs("exit\n\r\n", con->sshStream);
-  fputs("~.\r\n", con->sshStream);
-  fflush(con->sshStream);
+  write(con->sshStdIn, "\r\n", strlen("\r\n"));
+  write(con->sshStdIn, "exit\n\r\n", strlen("exit\n\r\n"));
+  write(con->sshStdIn, "~.\r\n", strlen("~.\r\n"));
 
-  // close the ssh process stream
-  pclose(con->sshStream);
+  // close stdin handle
+  close(con->sshStdIn);
 
   con->sshContinue = false;
 
@@ -4908,7 +4906,7 @@ gpointer svCreateSSHConnection (gpointer data)
   (void)sshRunOkay;
 
   // we only care about sshRunError, not sshRunOkay
-  if (sshRunErr)
+  if (sshRunErr || !con->sshStdIn)
   {
     // something -- happened - log the failure
     GString * errStr = g_string_new(NULL);
@@ -4942,33 +4940,6 @@ gpointer svCreateSSHConnection (gpointer data)
   g_string_free(fwd, true);
 
   con->sshPid = pid;
-
-  // open stdin stream
-  con->sshStream = fdopen(con->sshStdIn, "w");
-
-  // stdin stream failed to open
-  if (!con->sshStream)
-  {
-    // something -- happened - log the failure
-    GString * errStr = g_string_new(NULL);
-    g_string_printf(errStr, "Failed to open SSH input stream for '%s - %s'", con->name->str, con->address->str);
-    svLog(errStr->str, false);
-
-    // set connection's last error message
-    g_string_assign(con->lastErrorMessage, errStr->str);
-    g_idle_add_once(svSetSSHLastErrorMessage, con);
-    g_string_free(errStr, true);
-
-    // set connection variables
-    con->sshContinue = false;
-    con->disconnectType = SV_DISC_SSH_ERROR;
-    con->state = SV_STATE_ERROR;
-
-    // set connection list row icon
-    g_idle_add_once(svSetConnectionIconFromSSHError, con);
-
-    return NULL;
-  }
 
   con->sshContinue = true;
 
