@@ -34,6 +34,8 @@
 
 #include "spiritvnc.h"
 
+//GHashTable * m_appOptions;
+
 /* debug log since Windows doesn't print to console */
 void svLog (const char * strIn, gboolean skipStdOut)
 {
@@ -175,9 +177,7 @@ void svInitAppVars ()
   app->mainWin = NULL;
   app->parent = NULL;
   app->serverList = NULL;
-  app->toolsItems = g_new0(ToolsMenuItems, 1);
-
-  // die if we can't create toolsItems
+  app->toolsItems = g_hash_table_new(NULL, NULL);  //g_new0(ToolsMenuItems, 1);
   if (!app->toolsItems)
   {
     printf("SpiritVNC-GTK - CRITICAL: toolsItems is NULL after creation -- terminating app");
@@ -212,6 +212,9 @@ void svInitAppVars ()
   app->listenMode = false;
   app->listenPort = 5500;
   app->scanTimerSource = 0;
+
+  // hash tables for child windows and their children
+  //m_appOptions = g_hash_table_new(NULL, NULL);
 
   // important paths
 
@@ -275,6 +278,7 @@ void svInitConnObject (Connection * con)
   con->sshContinue = false;
   con->sshStdIn = -1;
   con->clipboard = g_string_new(NULL);
+  con->viewOnly = false;
 }
 
 
@@ -334,39 +338,47 @@ void svSetTooltip(GtkWidget * widget, const char * text)
 }
 
 
-/* handle send entered keystrokes window 'cancel' button */
-void svHandleSendEnteredKeystrokesCancel (GtkButton * self, gpointer userData)
+/* handle send entered keystrokes window buttons */
+void svHandleSendEnteredKeystrokesButtons (GtkButton * button, gpointer userData)
 {
-  SendKeysObj * obj = (SendKeysObj *)userData;
-
-  if (!obj)
+  // hash table for pointers to child window and its children
+  GHashTable * ht = (GHashTable *)userData;
+  if (!ht)
     return;
 
-  // destroy send keystrokes window
-  gtk_widget_destroy(obj->win);
-
-  gtk_window_present(GTK_WINDOW(app->mainWin));
-
-  g_free(obj);
-}
-
-
-/* handle send entered keystrokes window 'ok' button */
-void svHandleSendEnteredKeystrokesSend (GtkButton * self, gpointer userData)
-{
-  SendKeysObj * obj = (SendKeysObj *)userData;
-  if (!obj || !obj->con || !obj->con->vncObj || obj->con->state != SV_STATE_CONNECTED)
+  GtkWidget * win = (GtkWidget *)g_hash_table_lookup(ht, "win");
+  if (!win)
     return;
+
+  // handle cancel button
+  if ((GtkWidget *)button == (GtkWidget *)g_hash_table_lookup(ht, "btnCancel"))
+  {
+    gtk_widget_destroy(win);
+
+    gtk_window_present(GTK_WINDOW(app->mainWin));
+
+    g_hash_table_destroy(ht);
+
+    return;
+  }
+
+  const Connection * con = (Connection *)g_hash_table_lookup(ht, "con");
+  if (!con || !con->vncObj || con->state != SV_STATE_CONNECTED)
+    return;
+
+  const char * skType = (char *)g_hash_table_lookup(ht, "type");
+  GString * skTextToSend = (GString *)g_hash_table_lookup(ht, "textToSend");
+  GtkWidget * skTextView = (GtkWidget *)g_hash_table_lookup(ht, "textView");
 
   char * text = NULL;
 
   // we're sending keys from the send keys window
-  if (obj->type == SV_SENDKEYS_TYPE_ENTRY)
+  if (skType == SV_SENDKEYS_TYPE_ENTRY)
   {
-    if (!obj->textView)
+    if (!skTextView)
       return;
 
-    GtkTextBuffer * tb = gtk_text_view_get_buffer(GTK_TEXT_VIEW(obj->textView));
+    GtkTextBuffer * tb = gtk_text_view_get_buffer(GTK_TEXT_VIEW(skTextView));
 
     GtkTextIter start, end;
     gtk_text_buffer_get_start_iter(tb, &start);
@@ -382,14 +394,14 @@ void svHandleSendEnteredKeystrokesSend (GtkButton * self, gpointer userData)
   // we're sending keys directly from another function
   else
   {
-    if (!obj->textToSend || obj->textToSend->len == 0)
+    if (!skTextToSend || skTextToSend->len == 0)
       return;
 
     // set text
-    text = g_strdup(obj->textToSend->str);
+    text = g_strdup(skTextToSend->str);
 
     // free up gstring
-    g_string_free(obj->textToSend, true);
+    g_string_free(skTextToSend, true);
   }
 
   size_t len = strlen(text);
@@ -399,16 +411,16 @@ void svHandleSendEnteredKeystrokesSend (GtkButton * self, gpointer userData)
   for (size_t i = 0; i < len; i++)
     keys[i] = gdk_unicode_to_keyval(text[i]);
 
-  vnc_display_send_keys(VNC_DISPLAY(obj->con->vncObj), keys, len);
+  vnc_display_send_keys(VNC_DISPLAY(con->vncObj), keys, len);
 
   g_free(text);
 
-  if (obj->win)
-    gtk_widget_destroy(obj->win);
+  if (win)
+    gtk_widget_destroy(win);
 
   gtk_window_present(GTK_WINDOW(app->mainWin));
 
-  g_free(obj);
+  g_hash_table_destroy(ht);
 }
 
 
@@ -426,39 +438,36 @@ void svHandleCommandOutputOk (GtkButton * self, gpointer userData)
 }
 
 
-/* handle the app options 'cancel' button */
-void svHandleAppOptionsCancel (GtkButton * self, gpointer userData)
-{
-  AppOptions * opts = (AppOptions *)userData;
-  if (!opts)
-    return;
-
-  GtkWidget * optsWin = (GtkWidget *)opts->optionsWin;
-  if (!optsWin)
-    return;
-
-  // log
-  svLog("Canceled app options editing", true);
-
-  // destroy the app options window
-  gtk_widget_destroy(optsWin);
-
-  gtk_window_present(GTK_WINDOW(app->mainWin));
-
-  g_free(opts);
-}
-
-
 /* handle the app options 'save' button */
-void svHandleAppOptionsSave (GtkButton * self, gpointer userData)
+void svHandleAppOptionsButtons (GtkButton * button, gpointer userData)
 {
-  AppOptions * opts = (AppOptions *)userData;
-  if (!opts)
+  GHashTable * ht = (GHashTable *)userData;
+  if (!ht)
     return;
 
-  const GtkWidget * optsWin = (GtkWidget *)opts->optionsWin;
-  if (!optsWin)
+  const GtkWidget * btnCancel = (GtkWidget *)g_hash_table_lookup(ht, "btnCancel");
+  if (!btnCancel)
     return;
+
+  GtkWidget * win = (GtkWidget *)g_hash_table_lookup(ht, "win");
+  if (!win)
+    return;
+
+  // handle cancel
+  if ((GtkWidget *)button == btnCancel)
+  {
+    // log
+    svLog("Canceled app options editing", true);
+
+    // destroy the app options window
+    gtk_widget_destroy(win);
+
+    gtk_window_present(GTK_WINDOW(app->mainWin));
+
+    return;
+  }
+
+  // *** save stuff ***
 
   // log
   svLog("Saving app options", true);
@@ -466,22 +475,34 @@ void svHandleAppOptionsSave (GtkButton * self, gpointer userData)
   // -------------------------------------------
 
   // show tooltips
-  app->showTooltips = gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(opts->showTooltips));
+  GtkWidget * chkShowTooltips = (GtkWidget *)g_hash_table_lookup(ht, "chkShowTooltips");
+  if (chkShowTooltips)
+    app->showTooltips = gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(chkShowTooltips));
 
   // log to file
-  app->logToFile = gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(opts->logToFile));
+  GtkWidget * chkLogToFile = (GtkWidget *)g_hash_table_lookup(ht, "chkLogToFile");
+  if (chkLogToFile)
+    app->logToFile = gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(chkLogToFile));
 
   // scan timeout
-  app->scanTimeout = atoi(gtk_entry_get_text(GTK_ENTRY(opts->scanTimeout)));
+  GtkWidget * entScanTimeout = (GtkWidget *)g_hash_table_lookup(ht, "entScanTimeout");
+  if (entScanTimeout)
+    app->scanTimeout = atoi(gtk_entry_get_text(GTK_ENTRY(entScanTimeout)));
 
   // vnc connect wait time
-  app->vncConnectWaitTime = atoi(gtk_entry_get_text(GTK_ENTRY(opts->vncWaitTime)));
+  GtkWidget * entVncWaitTime = (GtkWidget *)g_hash_table_lookup(ht, "entVncWaitTime");
+  if (entVncWaitTime)
+    app->vncConnectWaitTime = atoi(gtk_entry_get_text(GTK_ENTRY(entVncWaitTime)));
 
   // ssh connect wait time
-  app->sshConnectWaitTime = atoi(gtk_entry_get_text(GTK_ENTRY(opts->sshWaitTime)));
+  GtkWidget * entSSHWaitTime = (GtkWidget *)g_hash_table_lookup(ht, "entSSHWaitTime");
+  if (entSSHWaitTime)
+    app->sshConnectWaitTime = atoi(gtk_entry_get_text(GTK_ENTRY(entSSHWaitTime)));
 
   // ssh command
-  g_string_assign(app->sshCommand, gtk_entry_get_text(GTK_ENTRY(opts->sshCommand)));
+  GtkWidget * entSSHCommand = (GtkWidget *)g_hash_table_lookup(ht, "entSSHCommand");
+  if (entSSHCommand)
+    g_string_assign(app->sshCommand, gtk_entry_get_text(GTK_ENTRY(entSSHCommand)));
 
   // -------------------------------------------
 
@@ -495,26 +516,44 @@ void svHandleAppOptionsSave (GtkButton * self, gpointer userData)
   // write out our config
   svConfigWrite();
 
+  g_hash_table_destroy(ht);
+
   // destroy options window
-  gtk_widget_destroy(opts->optionsWin);
+  gtk_widget_destroy(win);
 
   gtk_window_present(GTK_WINDOW(app->mainWin));
-
-  g_free(opts);
 }
 
 
 /* handle the connection edit 'save' button */
-void svHandleConnectionSettingsSave (GtkButton * self, gpointer userData)
+void svHandleConnectionEditButtons (GtkButton * button, gpointer userData)
 {
-  ConnectionSettings * settings = (ConnectionSettings *)userData;
-  if (!settings || !settings->settingsWin)
+  // hash table contains pointers to child window, its controls and data
+  GHashTable * ht = (GHashTable *)userData;
+  if (!ht)
     return;
 
   // set con object
-  Connection * con = settings->con;
+  Connection * con = (Connection *)g_hash_table_lookup(ht, "con");
   if (!con)
     return;
+
+  GtkWidget * win = (GtkWidget *)g_hash_table_lookup(ht, "win");
+  if (!win)
+    return;
+
+  // handle cancel button
+  if ((GtkWidget *)button == (GtkWidget *)g_hash_table_lookup(ht, "btnCancel"))
+  {
+    app->addNewConnection = false;
+
+    g_hash_table_destroy(ht);
+
+    gtk_widget_destroy(win);
+
+    gtk_window_present(GTK_WINDOW(app->mainWin));
+    return;
+  }
 
   // log
   GString * logStr = g_string_new(NULL);
@@ -524,8 +563,8 @@ void svHandleConnectionSettingsSave (GtkButton * self, gpointer userData)
 
   // connection name
   const char * oldVal = (const char *)con->name->str;
-  const char * nameVal = (const char *)gtk_entry_get_text(GTK_ENTRY(settings->connectionName));
-  const char * addressVal = (const char *)gtk_entry_get_text(GTK_ENTRY(settings->remoteAddress));
+  const char * nameVal = (const char *)gtk_entry_get_text(GTK_ENTRY((GtkWidget *)g_hash_table_lookup(ht, "connectionName")));
+  const char * addressVal = (const char *)gtk_entry_get_text(GTK_ENTRY((GtkWidget *)g_hash_table_lookup(ht, "remoteAddress")));
 
   // **===== validate stuff first =====**
 
@@ -535,10 +574,10 @@ void svHandleConnectionSettingsSave (GtkButton * self, gpointer userData)
     svShowMessageDialog("<b>'Connection name' cannot be empty</b>\n\nPlease enter a "
                                       "connection name then try saving again");
 
-    gtk_window_present(GTK_WINDOW(settings->settingsWin));
+    gtk_window_present(GTK_WINDOW(win));
 
     // focus remote address
-    gtk_widget_grab_focus(settings->connectionName);
+    gtk_widget_grab_focus((GtkWidget *)g_hash_table_lookup(ht, "connectionName"));
 
     return;
   }
@@ -549,12 +588,52 @@ void svHandleConnectionSettingsSave (GtkButton * self, gpointer userData)
     svShowMessageDialog("<b>'Remote Address' cannot be empty</b>\n\nPlease enter a "
                                       "valid remote address then try saving again");
 
-    gtk_window_present(GTK_WINDOW(settings->settingsWin));
+    gtk_window_present(GTK_WINDOW(win));
 
     // focus remote address
-    gtk_widget_grab_focus(settings->remoteAddress);
+    gtk_widget_grab_focus((GtkWidget *)g_hash_table_lookup(ht, "remoteAddress"));
 
     return;
+  }
+
+  // check for duplicate name if this is a new connection
+  if (app->addNewConnection)
+  {
+    // check if a connection exists with the same name
+    GList * rows = gtk_container_get_children(GTK_CONTAINER(app->serverList));
+
+    for (GList * l = rows; l; l = l->next)
+    {
+      GtkListBoxRow * row = l->data;
+      GtkWidget * box = gtk_bin_get_child(GTK_BIN(row));
+
+      const Connection * conTemp = g_object_get_data(G_OBJECT(box), "con");
+      if (!conTemp)
+          continue;
+
+      // if a connection exists with this name, warn user
+      if (strcmp(conTemp->name->str, nameVal) == 0)
+      {
+        GtkWidget * dialog = gtk_message_dialog_new_with_markup(GTK_WINDOW(win),
+                                          GTK_DIALOG_DESTROY_WITH_PARENT,
+                                          GTK_MESSAGE_ERROR,
+                                          GTK_BUTTONS_CLOSE,
+                                          "<b>Error: Connection name already exists</b>\n\nPlease change the "
+                                            "connection's name then try saving again");
+        gtk_window_set_title(GTK_WINDOW(dialog), "Name already exists - SpiritVNC");
+        gtk_dialog_run(GTK_DIALOG(dialog));
+        gtk_widget_destroy(dialog);
+
+        gtk_window_present(GTK_WINDOW(win));
+
+        // focus the connection name
+        gtk_widget_grab_focus((GtkWidget *)g_hash_table_lookup(ht, "connectionName"));
+
+        return;
+      }
+    }
+
+    g_list_free(rows);
   }
 
   // set new name
@@ -603,7 +682,7 @@ void svHandleConnectionSettingsSave (GtkButton * self, gpointer userData)
   }
 
   // connection group
-  const char * groupVal = (char *)gtk_entry_get_text(GTK_ENTRY(settings->connectionGroup));
+  const char * groupVal = (char *)gtk_entry_get_text(GTK_ENTRY((GtkWidget *)g_hash_table_lookup(ht, "connectionGroup")));
 
   // set new value
   if (groupVal[0] != '\0')
@@ -616,87 +695,87 @@ void svHandleConnectionSettingsSave (GtkButton * self, gpointer userData)
   g_string_assign(con->address, addressVal);
 
   // connection f12 macro
-  g_string_assign(con->f12Macro, gtk_entry_get_text(GTK_ENTRY(settings->f12Macro)));
+  g_string_assign(con->f12Macro, gtk_entry_get_text(GTK_ENTRY((GtkWidget *)g_hash_table_lookup(ht, "f12Macro"))));
 
   // don't change type for reverse vnc connections
   if (con->type != SV_TYPE_VNC_REVERSE)
   {
     // vnc choice radio button
-    if (gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(settings->vncChoice)))
+    if (gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON((GtkWidget *)g_hash_table_lookup(ht, "vncChoice"))))
       con->type = SV_TYPE_VNC;
 
     // vnc-over-ssh choice radio button
-    if (gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(settings->svncChoice)))
+    if (gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON((GtkWidget *)g_hash_table_lookup(ht, "svncChoice"))))
       con->type = SV_TYPE_VNC_OVER_SSH;
   }
 
   // vnc port
-  const char * vPortVal = (char *)gtk_entry_get_text(GTK_ENTRY(settings->vncPort));
+  const char * vPortVal = (char *)gtk_entry_get_text(GTK_ENTRY((GtkWidget *)g_hash_table_lookup(ht, "vncPort")));
 
   // set new value
   g_string_assign(con->vncPort, vPortVal);
 
   // vnc password
-  const char * vPassVal = gtk_entry_get_text(GTK_ENTRY(settings->vncPassword));
+  const char * vPassVal = gtk_entry_get_text(GTK_ENTRY((GtkWidget *)g_hash_table_lookup(ht, "vncPassword")));
 
   char * vPassDecoded = g_base64_encode((const unsigned char *)vPassVal, strlen(vPassVal));
   g_string_assign(con->vncPass, vPassDecoded);
   g_free(vPassDecoded);
 
   // vnc 'login' username
-  g_string_assign(con->vncLoginUser, gtk_entry_get_text(GTK_ENTRY(settings->vncLoginUsername)));
+  g_string_assign(con->vncLoginUser, gtk_entry_get_text(GTK_ENTRY((GtkWidget *)g_hash_table_lookup(ht, "vncLoginUsername"))));
 
   // vnc 'login' password
-  const char * vLoginPassVal = gtk_entry_get_text(GTK_ENTRY(settings->vncLoginPassword));
+  const char * vLoginPassVal = gtk_entry_get_text(GTK_ENTRY((GtkWidget *)g_hash_table_lookup(ht, "vncLoginPassword")));
 
   char * vLoginPassDecoded = g_base64_encode((const unsigned char *)vLoginPassVal, strlen(vLoginPassVal));
   g_string_assign(con->vncLoginPass, vLoginPassDecoded);
   g_free(vLoginPassDecoded);
 
   // vnc image quality
-  con->quality = gtk_combo_box_get_active(GTK_COMBO_BOX(settings->vncQuality));
+  con->quality = gtk_combo_box_get_active(GTK_COMBO_BOX((GtkWidget *)g_hash_table_lookup(ht, "vncQuality")));
 
   // vnc lossy encoding
-  con->lossyEncoding = gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(settings->vncLossyEncoding));
+  con->lossyEncoding = gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON((GtkWidget *)g_hash_table_lookup(ht, "vncLossyEncoding")));
 
   // vnc scaling
-  con->scale = gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(settings->vncScaling));
+  con->scale = gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON((GtkWidget *)g_hash_table_lookup(ht, "vncScaling")));
 
   // ssh username
-  g_string_assign(con->sshUser, gtk_entry_get_text(GTK_ENTRY(settings->sshUsername)));
+  g_string_assign(con->sshUser, gtk_entry_get_text(GTK_ENTRY((GtkWidget *)g_hash_table_lookup(ht, "sshUsername"))));
 
   // ssh port
-  g_string_assign(con->sshPort, gtk_entry_get_text(GTK_ENTRY(settings->sshPort)));
+  g_string_assign(con->sshPort, gtk_entry_get_text(GTK_ENTRY((GtkWidget *)g_hash_table_lookup(ht, "sshPort"))));
 
   // ssh private key file
-  g_string_assign(con->sshPrivKeyfile, gtk_entry_get_text(GTK_ENTRY(settings->sshPrivateKey)));
+  g_string_assign(con->sshPrivKeyfile, gtk_entry_get_text(GTK_ENTRY((GtkWidget *)g_hash_table_lookup(ht, "sshPrivateKey"))));
 
   // custom command 1 enabled
-  con->customCmd1Enabled = gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(settings->cmd1Enabled));
+  con->customCmd1Enabled = gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON((GtkWidget *)g_hash_table_lookup(ht, "cmd1Enabled")));
 
   // custom command 1 label
-  g_string_assign(con->customCmd1Label, gtk_entry_get_text(GTK_ENTRY(settings->cmd1Label)));
+  g_string_assign(con->customCmd1Label, gtk_entry_get_text(GTK_ENTRY((GtkWidget *)g_hash_table_lookup(ht, "cmd1Label"))));
 
   // custom command 1
-  g_string_assign(con->customCmd1, gtk_entry_get_text(GTK_ENTRY(settings->cmd1)));
+  g_string_assign(con->customCmd1, gtk_entry_get_text(GTK_ENTRY((GtkWidget *)g_hash_table_lookup(ht, "cmd1"))));
 
   // custom command 2 enabled
-  con->customCmd2Enabled = gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(settings->cmd2Enabled));
+  con->customCmd2Enabled = gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON((GtkWidget *)g_hash_table_lookup(ht, "cmd2Enabled")));
 
   // custom command 2 label
-  g_string_assign(con->customCmd2Label, gtk_entry_get_text(GTK_ENTRY(settings->cmd2Label)));
+  g_string_assign(con->customCmd2Label, gtk_entry_get_text(GTK_ENTRY((GtkWidget *)g_hash_table_lookup(ht, "cmd2Label"))));
 
   // custom command 2
-  g_string_assign(con->customCmd2, gtk_entry_get_text(GTK_ENTRY(settings->cmd2)));
+  g_string_assign(con->customCmd2, gtk_entry_get_text(GTK_ENTRY((GtkWidget *)g_hash_table_lookup(ht, "cmd2"))));
 
   // custom command 3 enabled
-  con->customCmd3Enabled = gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(settings->cmd3Enabled));
+  con->customCmd3Enabled = gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON((GtkWidget *)g_hash_table_lookup(ht, "cmd3Enabled")));
 
   // custom command 3 label
-  g_string_assign(con->customCmd3Label, gtk_entry_get_text(GTK_ENTRY(settings->cmd3Label)));
+  g_string_assign(con->customCmd3Label, gtk_entry_get_text(GTK_ENTRY((GtkWidget *)g_hash_table_lookup(ht, "cmd3Label"))));
 
   // custom command 3
-  g_string_assign(con->customCmd3, gtk_entry_get_text(GTK_ENTRY(settings->cmd3)));
+  g_string_assign(con->customCmd3, gtk_entry_get_text(GTK_ENTRY((GtkWidget *)g_hash_table_lookup(ht, "cmd3"))));
 
   // write out the settings
   svConfigWrite();
@@ -704,38 +783,8 @@ void svHandleConnectionSettingsSave (GtkButton * self, gpointer userData)
   // ========= add to the hostlist and connections if this is a new connection =========
   if (app->addNewConnection)
   {
-    // check if a connection exists with the same name
+    // get all rows from host list
     GList * rows = gtk_container_get_children(GTK_CONTAINER(app->serverList));
-
-    for (GList * l = rows; l; l = l->next)
-    {
-        GtkListBoxRow * row = l->data;
-        GtkWidget * box = gtk_bin_get_child(GTK_BIN(row));
-
-        const Connection * conTemp = g_object_get_data(G_OBJECT(box), "con");
-        if (!conTemp)
-            continue;
-
-        // if a connection exists with this name, warn user
-        if (strcmp(conTemp->name->str, con->name->str) == 0)
-        {
-          GtkWidget * dialog = gtk_message_dialog_new_with_markup(GTK_WINDOW(settings->settingsWin),
-                                            GTK_DIALOG_DESTROY_WITH_PARENT,
-                                            GTK_MESSAGE_ERROR,
-                                            GTK_BUTTONS_CLOSE,
-                                            "<b>Error: Connection name already exists</b>\n\nPlease change the "
-                                              "connection's name then try saving again");
-          gtk_dialog_run(GTK_DIALOG(dialog));
-          gtk_widget_destroy(dialog);
-
-          gtk_window_present(GTK_WINDOW(settings->settingsWin));
-
-          // focus the connection name
-          gtk_widget_grab_focus(settings->connectionName);
-
-          return;
-        }
-    }
 
     gint rowIdx = -1;
 
@@ -786,12 +835,12 @@ void svHandleConnectionSettingsSave (GtkButton * self, gpointer userData)
   }
 
   // destroy the connection settings window
-  gtk_widget_destroy(settings->settingsWin);
+  gtk_widget_destroy(win);
 
   gtk_window_present(GTK_WINDOW(app->mainWin));
 
   // free the g_new'd settings
-  g_free(settings);
+  g_hash_table_destroy(ht);
 
   // update stuff if connected
   if (con->state == SV_STATE_CONNECTED)
@@ -822,38 +871,20 @@ void svHandleConnectionSettingsSave (GtkButton * self, gpointer userData)
 }
 
 
-/* handles the connection editor cancel button */
-void svHandleConnectionSettingsCancel (GtkButton* self, gpointer userData)
-{
-  ConnectionSettings * settings = (ConnectionSettings *)userData;
-
-  if (!settings || !settings->settingsWin)
-    return;
-
-  // log
-  svLog("Canceled connection editing", true);
-
-  // destroy connection editing window
-  gtk_widget_destroy(settings->settingsWin);
-
-  gtk_window_present(GTK_WINDOW(app->mainWin));
-
-  // free the g_new'd settings
-  g_free(settings);
-
-  app->addNewConnection = false;
-}
-
-
 /* handles the 'choose private key' button in the connection editor */
 void svHandleConnectionSSHPrivKey (GtkButton * self, gpointer userData)
 {
-  ConnectionSettings * settings = (ConnectionSettings *)userData;
-  if (!settings || !settings->settingsWin)
+  // hash table has pointers to child window and its controls
+  GHashTable * ht = (GHashTable *)userData;
+  if (!ht)
     return;
 
-  GtkWidget * entry = settings->sshPrivateKey;
+  GtkWidget * entry = (GtkWidget *)g_hash_table_lookup(ht, "sshPrivateKey");
   if (!entry || !GTK_IS_ENTRY(entry))
+    return;
+
+  GtkWidget * win = (GtkWidget *)g_hash_table_lookup(ht, "win");
+  if (!win)
     return;
 
   GtkWidget * dialog;
@@ -861,7 +892,7 @@ void svHandleConnectionSSHPrivKey (GtkButton * self, gpointer userData)
   gint res;
 
   dialog = gtk_file_chooser_dialog_new("Choose a private key",
-                                        GTK_WINDOW(settings->settingsWin),
+                                        GTK_WINDOW(win),
                                         action,
                                         ("_Cancel"),
                                         GTK_RESPONSE_CANCEL,
@@ -890,27 +921,29 @@ void svHandleConnectionSSHPrivKey (GtkButton * self, gpointer userData)
 /* create and display connection edit window */
 void svShowAppOptionsWindow ()
 {
-  AppOptions * opts = g_new0(AppOptions, 1);
-  if (!opts)
+  GHashTable * htAppOptions = g_hash_table_new(NULL, NULL);
+  if (!htAppOptions)
     return;
 
   // log
   svLog("Editing app options", true);
 
   // create edit window
-  opts->optionsWin = gtk_window_new(GTK_WINDOW_TOPLEVEL);
+  GtkWidget * win = gtk_window_new(GTK_WINDOW_TOPLEVEL);
+  //opts->optionsWin = win;
+  g_hash_table_insert(htAppOptions, "win", win);
 
   // set window title
-  gtk_window_set_title(GTK_WINDOW(opts->optionsWin), "SpiritVNC App Options");
-  gtk_window_set_modal(GTK_WINDOW(opts->optionsWin), true);
-  gtk_window_set_resizable(GTK_WINDOW(opts->optionsWin), false);
-  gtk_window_set_transient_for(GTK_WINDOW(opts->optionsWin), GTK_WINDOW(app->mainWin));
-  gtk_window_set_position(GTK_WINDOW(opts->optionsWin), GTK_WIN_POS_CENTER_ON_PARENT);
+  gtk_window_set_title(GTK_WINDOW(win), "SpiritVNC App Options");
+  gtk_window_set_modal(GTK_WINDOW(win), true);
+  gtk_window_set_resizable(GTK_WINDOW(win), false);
+  gtk_window_set_transient_for(GTK_WINDOW(win), GTK_WINDOW(app->mainWin));
+  gtk_window_set_position(GTK_WINDOW(win), GTK_WIN_POS_CENTER_ON_PARENT);
 
   // parent box
   GtkWidget * boxOptsParent = gtk_box_new(GTK_ORIENTATION_VERTICAL, 7);
   gtk_container_set_border_width(GTK_CONTAINER(boxOptsParent), 5);
-  gtk_container_add(GTK_CONTAINER(opts->optionsWin), boxOptsParent);
+  gtk_container_add(GTK_CONTAINER(win), boxOptsParent);
 
   // container grid
   GtkWidget * optsPage = gtk_grid_new();
@@ -924,69 +957,75 @@ void svShowAppOptionsWindow ()
   // show tooltips
   GtkWidget * lblTooltips = gtk_label_new("Show tooltips");
   gtk_widget_set_halign(lblTooltips, GTK_ALIGN_END);
-  opts->showTooltips = gtk_check_button_new();
+  GtkWidget * chkShowTooltips = gtk_check_button_new();
+  g_hash_table_insert(htAppOptions, "chkShowTooltips", chkShowTooltips);
   if (app->showTooltips)
-    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(opts->showTooltips), true);
-  svSetTooltip(opts->showTooltips, "Displays tooltips for most app items");
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(chkShowTooltips), true);
+  svSetTooltip(chkShowTooltips, "Displays tooltips for most app items");
 
   gtk_grid_attach(GTK_GRID(optsPage), lblTooltips, 1, rowNum, 1, 1);
-  gtk_grid_attach(GTK_GRID(optsPage), opts->showTooltips, 2, rowNum++, 1, 1);
+  gtk_grid_attach(GTK_GRID(optsPage), chkShowTooltips, 2, rowNum++, 1, 1);
 
   // log to file
   GtkWidget * lblLog = gtk_label_new("Log events to file");
   gtk_widget_set_halign(lblLog, GTK_ALIGN_END);
-  opts->logToFile = gtk_check_button_new();
-  svSetTooltip(opts->logToFile, "Logs most app events to a log file");
+  GtkWidget * chkLogToFile = gtk_check_button_new();
+  g_hash_table_insert(htAppOptions, "chkLogToFile", chkLogToFile);
+  svSetTooltip(chkLogToFile, "Logs most app events to a log file");
 
   if (app->logToFile)
-    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(opts->logToFile), true);
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(chkLogToFile), true);
 
   gtk_grid_attach(GTK_GRID(optsPage), lblLog, 1, rowNum, 1, 1);
-  gtk_grid_attach(GTK_GRID(optsPage), opts->logToFile, 2, rowNum++, 1, 1);
+  gtk_grid_attach(GTK_GRID(optsPage), chkLogToFile, 2, rowNum++, 1, 1);
 
   // scan timeout
   GtkWidget * lblScanTime = gtk_label_new("Scan timeout (secs)");
   gtk_widget_set_halign(lblScanTime, GTK_ALIGN_END);
-  opts->scanTimeout = gtk_spin_button_new_with_range(0, 100, 1);
-  gtk_spin_button_set_value(GTK_SPIN_BUTTON(opts->scanTimeout), app->scanTimeout);
-  svSetTooltip(opts->scanTimeout, "How long the app waits before moving to the next viewer "
+  GtkWidget * spinScanTimeout = gtk_spin_button_new_with_range(0, 100, 1);
+  g_hash_table_insert(htAppOptions, "spinScanTimeout", spinScanTimeout);
+  gtk_spin_button_set_value(GTK_SPIN_BUTTON(spinScanTimeout), app->scanTimeout);
+  svSetTooltip(spinScanTimeout, "How long the app waits before moving to the next viewer "
     "when scanning is enabled");
 
   gtk_grid_attach(GTK_GRID(optsPage), lblScanTime, 1, rowNum, 1, 1);
-  gtk_grid_attach(GTK_GRID(optsPage), opts->scanTimeout, 2, rowNum++, 1, 1);
+  gtk_grid_attach(GTK_GRID(optsPage), spinScanTimeout, 2, rowNum++, 1, 1);
 
   // vnc wait time
   GtkWidget * lblVNCWaitTime = gtk_label_new("VNC wait time");
   gtk_widget_set_halign(lblVNCWaitTime, GTK_ALIGN_END);
-  opts->vncWaitTime = gtk_spin_button_new_with_range(0, 100, 1);
-  gtk_spin_button_set_value(GTK_SPIN_BUTTON(opts->vncWaitTime), app->vncConnectWaitTime);
-  svSetTooltip(opts->vncWaitTime, "How long the app waits before a VNC connection "
+  GtkWidget * spinVncWaitTime = gtk_spin_button_new_with_range(0, 100, 1);
+  g_hash_table_insert(htAppOptions, "spinVncWaitTime", spinVncWaitTime);
+  gtk_spin_button_set_value(GTK_SPIN_BUTTON(spinVncWaitTime), app->vncConnectWaitTime);
+  svSetTooltip(spinVncWaitTime, "How long the app waits before a VNC connection "
     "attempt times out");
 
   gtk_grid_attach(GTK_GRID(optsPage), lblVNCWaitTime, 1, rowNum, 1, 1);
-  gtk_grid_attach(GTK_GRID(optsPage), opts->vncWaitTime, 2, rowNum++, 1, 1);
+  gtk_grid_attach(GTK_GRID(optsPage), spinVncWaitTime, 2, rowNum++, 1, 1);
 
   // ssh wait time
   GtkWidget * lblSSHWaitTime = gtk_label_new("SSH wait time");
   gtk_widget_set_halign(lblSSHWaitTime, GTK_ALIGN_END);
-  opts->sshWaitTime = gtk_spin_button_new_with_range(0, 100, 1);
-  gtk_spin_button_set_value(GTK_SPIN_BUTTON(opts->sshWaitTime), app->sshConnectWaitTime);
-  svSetTooltip(opts->sshWaitTime, "How long the app waits before a SSH connection "
+  GtkWidget * spinSSHWaitTime = gtk_spin_button_new_with_range(0, 100, 1);
+  g_hash_table_insert(htAppOptions, "spinSSHWaitTime", spinSSHWaitTime);
+  gtk_spin_button_set_value(GTK_SPIN_BUTTON(spinSSHWaitTime), app->sshConnectWaitTime);
+  svSetTooltip(spinSSHWaitTime, "How long the app waits before a SSH connection "
     "attempt times out");
 
   gtk_grid_attach(GTK_GRID(optsPage), lblSSHWaitTime, 1, rowNum, 1, 1);
-  gtk_grid_attach(GTK_GRID(optsPage), opts->sshWaitTime, 2, rowNum++, 1, 1);
+  gtk_grid_attach(GTK_GRID(optsPage), spinSSHWaitTime, 2, rowNum++, 1, 1);
 
   // ssh command
   GtkWidget * lblSSHCmd = gtk_label_new("SSH command");
   gtk_widget_set_halign(lblSSHCmd, GTK_ALIGN_END);
-  opts->sshCommand = gtk_entry_new();
-  gtk_entry_set_width_chars(GTK_ENTRY(opts->sshCommand), 30);
-  gtk_entry_set_text(GTK_ENTRY(opts->sshCommand), app->sshCommand->str);
-  svSetTooltip(opts->sshCommand, "The system SSH command (/usr/bin/ssh, etc)");
+  GtkWidget * entSSHCommand = gtk_entry_new();
+  g_hash_table_insert(htAppOptions, "entSSHCommand", entSSHCommand);
+  gtk_entry_set_width_chars(GTK_ENTRY(entSSHCommand), 30);
+  gtk_entry_set_text(GTK_ENTRY(entSSHCommand), app->sshCommand->str);
+  svSetTooltip(entSSHCommand, "The system SSH command (/usr/bin/ssh, etc)");
 
   gtk_grid_attach(GTK_GRID(optsPage), lblSSHCmd, 1, rowNum, 1, 1);
-  gtk_grid_attach(GTK_GRID(optsPage), opts->sshCommand, 2, rowNum++, 1, 1);
+  gtk_grid_attach(GTK_GRID(optsPage), entSSHCommand, 2, rowNum++, 1, 1);
 
   // add optsPage to parent box
   gtk_box_pack_start(GTK_BOX(boxOptsParent), optsPage, false, false, 0);
@@ -998,14 +1037,15 @@ void svShowAppOptionsWindow ()
   GtkWidget * btnSave = gtk_button_new_with_label("Save");
   gtk_widget_set_size_request(btnSave, 110, -1);
   svSetTooltip(btnSave, "Click to save these settings");
-  g_signal_connect(btnSave, "clicked", G_CALLBACK(svHandleAppOptionsSave), opts);
+  g_signal_connect(btnSave, "clicked", G_CALLBACK(svHandleAppOptionsButtons), htAppOptions);
 
   // cancel
   GtkWidget * btnCancel = gtk_button_new_with_label("Cancel");
+  g_hash_table_insert(htAppOptions, "btnCancel", btnCancel);
   gtk_widget_set_size_request(btnCancel, 110, -1);
   svSetTooltip(btnCancel, "Click to abandon any changes.  "
     "Caution: Any changes will be lost!");
-  g_signal_connect(btnCancel, "clicked", G_CALLBACK(svHandleAppOptionsCancel), opts);
+  g_signal_connect(btnCancel, "clicked", G_CALLBACK(svHandleAppOptionsButtons), htAppOptions);
 
   gtk_box_pack_end(GTK_BOX(boxButtons), btnSave, false, false, 3);
   gtk_box_pack_end(GTK_BOX(boxButtons), btnCancel, false, false, 3);
@@ -1013,12 +1053,12 @@ void svShowAppOptionsWindow ()
   gtk_container_add(GTK_CONTAINER(boxOptsParent), boxButtons);
 
   // show everything
-  gtk_widget_show_all(opts->optionsWin);
+  gtk_widget_show_all(win);
 
-  gtk_window_present(GTK_WINDOW(opts->optionsWin));
+  gtk_window_present(GTK_WINDOW(win));
 
   // focus the first entry
-  gtk_widget_grab_focus(opts->showTooltips);
+  gtk_widget_grab_focus(chkShowTooltips);
 }
 
 
@@ -1145,7 +1185,8 @@ void svShowConnectionActionsWindow ()
   gtk_window_present(GTK_WINDOW(app->connectionActionsWindow));
 
   // add escape key handling to close window
-  g_signal_connect(app->connectionActionsWindow, "key-press-event", G_CALLBACK(svHandleConnectionActionsCloseKey), NULL);
+  g_signal_connect(app->connectionActionsWindow, "key-press-event", G_CALLBACK(svHandleConnectionActionsCloseKey),
+    NULL);
 }
 
 
@@ -1155,9 +1196,8 @@ void svShowConnectionEditWindow (Connection * con)
   if (!con || con->name->len == 0)
     return;
 
-  ConnectionSettings * settings = g_new0(ConnectionSettings, 1);
-  if (!settings)
-    return;
+  // hash table to contain pointers to this window and its children
+  GHashTable * ht = g_hash_table_new(NULL, NULL);
 
   // log
   GString * logStr = g_string_new(NULL);
@@ -1165,7 +1205,8 @@ void svShowConnectionEditWindow (Connection * con)
   svLog(logStr->str, true);
   g_string_free(logStr, true);
 
-  settings->con = con;
+  // store this connection in hash table
+  g_hash_table_insert(ht, "con", con);
 
   gboolean preventConnectedEditing = false;
 
@@ -1174,22 +1215,23 @@ void svShowConnectionEditWindow (Connection * con)
     preventConnectedEditing = true;
 
   // create edit window
-  settings->settingsWin = gtk_window_new(GTK_WINDOW_TOPLEVEL);
-  gtk_window_set_modal(GTK_WINDOW(settings->settingsWin), true);
-  gtk_window_set_resizable(GTK_WINDOW(settings->settingsWin), false);
-  gtk_window_set_transient_for(GTK_WINDOW(settings->settingsWin), GTK_WINDOW(app->mainWin));
-  gtk_window_set_position(GTK_WINDOW(settings->settingsWin), GTK_WIN_POS_CENTER_ON_PARENT);
+  GtkWidget * win = gtk_window_new(GTK_WINDOW_TOPLEVEL);
+  g_hash_table_insert(ht, "win", win);
+  gtk_window_set_modal(GTK_WINDOW(win), true);
+  gtk_window_set_resizable(GTK_WINDOW(win), false);
+  gtk_window_set_transient_for(GTK_WINDOW(win), GTK_WINDOW(app->mainWin));
+  gtk_window_set_position(GTK_WINDOW(win), GTK_WIN_POS_CENTER_ON_PARENT);
 
   // set window title
   GString * strTitle = g_string_new(NULL);
   g_string_printf(strTitle, "Editing '%s' - SpiritVNC", con->name->str);
-  gtk_window_set_title(GTK_WINDOW(settings->settingsWin), strTitle->str);
+  gtk_window_set_title(GTK_WINDOW(win), strTitle->str);
   g_string_free(strTitle, true);
 
   // create parent box
   GtkWidget * boxEditParent = gtk_box_new(GTK_ORIENTATION_VERTICAL, 7);
   gtk_container_set_border_width(GTK_CONTAINER(boxEditParent), 5);
-  gtk_container_add(GTK_CONTAINER(settings->settingsWin), boxEditParent);
+  gtk_container_add(GTK_CONTAINER(win), boxEditParent);
 
   // tab control
   GtkWidget * editTab = gtk_notebook_new();
@@ -1204,54 +1246,58 @@ void svShowConnectionEditWindow (Connection * con)
   // connection name
   GtkWidget * lblConName = gtk_label_new("Connection name");
   gtk_widget_set_halign(lblConName, GTK_ALIGN_END);
-  settings->connectionName = gtk_entry_new();
+  GtkWidget * connectionName = gtk_entry_new();
+  g_hash_table_insert(ht, "connectionName", connectionName);
   if (preventConnectedEditing)
-    gtk_widget_set_sensitive(GTK_WIDGET(settings->connectionName), false);
-  gtk_entry_set_width_chars(GTK_ENTRY(settings->connectionName), 30);
-  gtk_entry_set_text(GTK_ENTRY(settings->connectionName), con->name->str);
-  svSetTooltip(settings->connectionName, "The name you choose for this connection "
+    gtk_widget_set_sensitive(GTK_WIDGET(connectionName), false);
+  gtk_entry_set_width_chars(GTK_ENTRY(connectionName), 30);
+  gtk_entry_set_text(GTK_ENTRY(connectionName), con->name->str);
+  svSetTooltip(connectionName, "The name you choose for this connection "
     "(not the host address)");
 
   gtk_grid_attach(GTK_GRID(vncPage), lblConName, 1, 1, 1, 1);
-  gtk_grid_attach(GTK_GRID(vncPage), settings->connectionName, 2, 1, 3, 1);
+  gtk_grid_attach(GTK_GRID(vncPage), connectionName, 2, 1, 3, 1);
 
   // connection group
   GtkWidget * lblConGroup = gtk_label_new("Connection group");
   gtk_widget_set_halign(lblConGroup, GTK_ALIGN_END);
-  settings->connectionGroup = gtk_entry_new();
+  GtkWidget * connectionGroup = gtk_entry_new();
+  g_hash_table_insert(ht, "connectionGroup", connectionGroup);
   if (preventConnectedEditing)
-    gtk_widget_set_sensitive(GTK_WIDGET(settings->connectionGroup), false);
-  gtk_entry_set_width_chars(GTK_ENTRY(settings->connectionGroup), 30);
-  gtk_entry_set_text(GTK_ENTRY(settings->connectionGroup), con->group->str);
-  svSetTooltip(settings->connectionGroup, "The group this connection belongs to");
+    gtk_widget_set_sensitive(GTK_WIDGET(connectionGroup), false);
+  gtk_entry_set_width_chars(GTK_ENTRY(connectionGroup), 30);
+  gtk_entry_set_text(GTK_ENTRY(connectionGroup), con->group->str);
+  svSetTooltip(connectionGroup, "The group this connection belongs to");
 
   gtk_grid_attach(GTK_GRID(vncPage), lblConGroup, 1, 2, 1, 1);
-  gtk_grid_attach(GTK_GRID(vncPage), settings->connectionGroup, 2, 2, 3, 1);
+  gtk_grid_attach(GTK_GRID(vncPage), connectionGroup, 2, 2, 3, 1);
 
   // connection address
   GtkWidget * lblConAddr = gtk_label_new("Remote address");
   gtk_widget_set_halign(lblConAddr, GTK_ALIGN_END);
-  settings->remoteAddress = gtk_entry_new();
+  GtkWidget * remoteAddress = gtk_entry_new();
+  g_hash_table_insert(ht, "remoteAddress", remoteAddress);
   if (preventConnectedEditing)
-    gtk_widget_set_sensitive(GTK_WIDGET(settings->remoteAddress), false);
-  gtk_entry_set_width_chars(GTK_ENTRY(settings->remoteAddress), 30);
-  gtk_entry_set_text(GTK_ENTRY(settings->remoteAddress), con->address->str);
-  svSetTooltip(settings->remoteAddress, "The network address of the remote host");
+    gtk_widget_set_sensitive(GTK_WIDGET(remoteAddress), false);
+  gtk_entry_set_width_chars(GTK_ENTRY(remoteAddress), 30);
+  gtk_entry_set_text(GTK_ENTRY(remoteAddress), con->address->str);
+  svSetTooltip(remoteAddress, "The network address of the remote host");
 
   gtk_grid_attach(GTK_GRID(vncPage), lblConAddr, 1, 3, 1, 1);
-  gtk_grid_attach(GTK_GRID(vncPage), settings->remoteAddress, 2, 3, 3, 1);
+  gtk_grid_attach(GTK_GRID(vncPage), remoteAddress, 2, 3, 3, 1);
 
   // f12 macro
   GtkWidget * lblF12Macro = gtk_label_new("F12 macro");
   gtk_widget_set_halign(lblF12Macro, GTK_ALIGN_END);
-  settings->f12Macro = gtk_entry_new();
-  gtk_entry_set_width_chars(GTK_ENTRY(settings->f12Macro), 30);
-  gtk_entry_set_text(GTK_ENTRY(settings->f12Macro), con->f12Macro->str);
-  svSetTooltip(settings->f12Macro, "The characters sent to the remote host when the "
+  GtkWidget * f12Macro = gtk_entry_new();
+  g_hash_table_insert(ht, "f12Macro", f12Macro);
+  gtk_entry_set_width_chars(GTK_ENTRY(f12Macro), 30);
+  gtk_entry_set_text(GTK_ENTRY(f12Macro), con->f12Macro->str);
+  svSetTooltip(f12Macro, "The characters sent to the remote host when the "
     "F12 key is pressed");
 
   gtk_grid_attach(GTK_GRID(vncPage), lblF12Macro, 1, 4, 1, 1);
-  gtk_grid_attach(GTK_GRID(vncPage), settings->f12Macro, 2, 4, 3, 1);
+  gtk_grid_attach(GTK_GRID(vncPage), f12Macro, 2, 4, 3, 1);
 
   // vnc or vnc-over-ssh
   gboolean allowConnectionTypeChange = true;
@@ -1268,127 +1314,134 @@ void svShowConnectionEditWindow (Connection * con)
 
   // - vnc choice group
   GSList * vncChoiceGroup = NULL;
-  settings->vncChoice = gtk_radio_button_new_with_label(vncChoiceGroup, "VNC");
-  gtk_widget_set_sensitive(settings->vncChoice, allowConnectionTypeChange);
-  vncChoiceGroup = gtk_radio_button_get_group(GTK_RADIO_BUTTON(settings->vncChoice));
-  settings->svncChoice = gtk_radio_button_new_with_label(vncChoiceGroup, "VNC over SSH");
-  gtk_widget_set_sensitive(settings->svncChoice, allowConnectionTypeChange);
-  svSetTooltip(settings->vncChoice, "Sets this to be a VNC connection");
-  vncChoiceGroup = gtk_radio_button_get_group(GTK_RADIO_BUTTON(settings->svncChoice));
-  svSetTooltip(settings->svncChoice, "Sets this to be a VNC-over-SSH connection");
+  GtkWidget * vncChoice = gtk_radio_button_new_with_label(vncChoiceGroup, "VNC");
+  g_hash_table_insert(ht, "vncChoice", vncChoice);
+  gtk_widget_set_sensitive(vncChoice, allowConnectionTypeChange);
+  vncChoiceGroup = gtk_radio_button_get_group(GTK_RADIO_BUTTON(vncChoice));
+  GtkWidget * svncChoice = gtk_radio_button_new_with_label(vncChoiceGroup, "VNC over SSH");
+  g_hash_table_insert(ht, "svncChoice", svncChoice);
+  gtk_widget_set_sensitive(svncChoice, allowConnectionTypeChange);
+  svSetTooltip(vncChoice, "Sets this to be a VNC connection");
+  vncChoiceGroup = gtk_radio_button_get_group(GTK_RADIO_BUTTON(svncChoice));
+  svSetTooltip(svncChoice, "Sets this to be a VNC-over-SSH connection");
 
   // - set value from connection
   if (con->type == SV_TYPE_VNC)
-    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(settings->vncChoice), true);
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(vncChoice), true);
   else if (con->type == SV_TYPE_VNC_OVER_SSH)
-    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(settings->svncChoice), true);
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(svncChoice), true);
 
-  gtk_container_add(GTK_CONTAINER(boxVNCChoice), settings->vncChoice);
-  gtk_container_add(GTK_CONTAINER(boxVNCChoice), settings->svncChoice);
+  gtk_container_add(GTK_CONTAINER(boxVNCChoice), vncChoice);
+  gtk_container_add(GTK_CONTAINER(boxVNCChoice), svncChoice);
 
   gtk_grid_attach(GTK_GRID(vncPage), boxVNCChoice, 2, 5, 1, 1);
 
   // vnc port
   GtkWidget * lblVNCPort = gtk_label_new("VNC port");
   gtk_widget_set_halign(lblVNCPort, GTK_ALIGN_END);
-  settings->vncPort = gtk_entry_new();
+  GtkWidget * vncPort = gtk_entry_new();
+  g_hash_table_insert(ht, "vncPort", vncPort);
   if (preventConnectedEditing)
-    gtk_widget_set_sensitive(GTK_WIDGET(settings->vncPort), false);
-  gtk_entry_set_width_chars(GTK_ENTRY(settings->vncPort), 10);
-  gtk_entry_set_text(GTK_ENTRY(settings->vncPort), con->vncPort->str);
-  svSetTooltip(settings->vncPort, "The remote host's numbered VNC port");
+    gtk_widget_set_sensitive(GTK_WIDGET(vncPort), false);
+  gtk_entry_set_width_chars(GTK_ENTRY(vncPort), 10);
+  gtk_entry_set_text(GTK_ENTRY(vncPort), con->vncPort->str);
+  svSetTooltip(vncPort, "The remote host's numbered VNC port");
 
   gtk_grid_attach(GTK_GRID(vncPage), lblVNCPort, 1, 6, 1, 1);
-  gtk_grid_attach(GTK_GRID(vncPage), settings->vncPort, 2, 6, 3, 1);
+  gtk_grid_attach(GTK_GRID(vncPage), vncPort, 2, 6, 3, 1);
 
   // vnc password
   GtkWidget * lblVNCPass = gtk_label_new("VNC password");
   gtk_widget_set_halign(lblVNCPass, GTK_ALIGN_END);
-  settings->vncPassword = gtk_entry_new();
+  GtkWidget * vncPassword = gtk_entry_new();
+  g_hash_table_insert(ht, "vncPassword", vncPassword);
   if (preventConnectedEditing)
-    gtk_widget_set_sensitive(GTK_WIDGET(settings->vncPassword), false);
-  gtk_entry_set_width_chars(GTK_ENTRY(settings->vncPassword), 30);
-  gtk_entry_set_visibility(GTK_ENTRY(settings->vncPassword), false);
+    gtk_widget_set_sensitive(GTK_WIDGET(vncPassword), false);
+  gtk_entry_set_width_chars(GTK_ENTRY(vncPassword), 30);
+  gtk_entry_set_visibility(GTK_ENTRY(vncPassword), false);
   gsize vncPassOutLen = 0;
   unsigned char * vncPassTemp = g_base64_decode(con->vncPass->str, &vncPassOutLen);
-  gtk_entry_set_text(GTK_ENTRY(settings->vncPassword), (const char *)vncPassTemp);
+  gtk_entry_set_text(GTK_ENTRY(vncPassword), (const char *)vncPassTemp);
   g_free(vncPassTemp);
-  svSetTooltip(settings->vncPassword, "The standard VNC password");
+  svSetTooltip(vncPassword, "The standard VNC password");
 
   gtk_grid_attach(GTK_GRID(vncPage), lblVNCPass, 1, 7, 1, 1);
-  gtk_grid_attach(GTK_GRID(vncPage), settings->vncPassword, 2, 7, 3, 1);
+  gtk_grid_attach(GTK_GRID(vncPage), vncPassword, 2, 7, 3, 1);
 
   // vnc login username
   GtkWidget * lblVNCLoginName = gtk_label_new("VNC login username");
   gtk_widget_set_halign(lblVNCLoginName, GTK_ALIGN_END);
-  settings->vncLoginUsername = gtk_entry_new();
+  GtkWidget * vncLoginUsername = gtk_entry_new();
+  g_hash_table_insert(ht, "vncLoginUsername", vncLoginUsername);
   if (preventConnectedEditing)
-    gtk_widget_set_sensitive(GTK_WIDGET(settings->vncLoginUsername), false);
-  gtk_entry_set_width_chars(GTK_ENTRY(settings->vncLoginUsername), 30);
-  gtk_entry_set_text(GTK_ENTRY(settings->vncLoginUsername), con->vncLoginUser->str);
-  svSetTooltip(settings->vncLoginUsername, "The username used with VNC 'login' authentication");
+    gtk_widget_set_sensitive(GTK_WIDGET(vncLoginUsername), false);
+  gtk_entry_set_width_chars(GTK_ENTRY(vncLoginUsername), 30);
+  gtk_entry_set_text(GTK_ENTRY(vncLoginUsername), con->vncLoginUser->str);
+  svSetTooltip(vncLoginUsername, "The username used with VNC 'login' authentication");
 
   gtk_grid_attach(GTK_GRID(vncPage), lblVNCLoginName, 1, 8, 1, 1);
-  gtk_grid_attach(GTK_GRID(vncPage), settings->vncLoginUsername, 2, 8, 3, 1);
+  gtk_grid_attach(GTK_GRID(vncPage), vncLoginUsername, 2, 8, 3, 1);
 
   // vnc login password
   GtkWidget * lblVNCLoginPass = gtk_label_new("VNC login password");
   gtk_widget_set_halign(lblVNCLoginPass, GTK_ALIGN_END);
-  settings->vncLoginPassword = gtk_entry_new();
+  GtkWidget * vncLoginPassword = gtk_entry_new();
+  g_hash_table_insert(ht, "vncLoginPassword", vncLoginPassword);
   if (preventConnectedEditing)
-    gtk_widget_set_sensitive(GTK_WIDGET(settings->vncLoginPassword), false);
-  gtk_entry_set_width_chars(GTK_ENTRY(settings->vncLoginPassword), 30);
-  gtk_entry_set_visibility(GTK_ENTRY(settings->vncLoginPassword), false);
+    gtk_widget_set_sensitive(GTK_WIDGET(vncLoginPassword), false);
+  gtk_entry_set_width_chars(GTK_ENTRY(vncLoginPassword), 30);
+  gtk_entry_set_visibility(GTK_ENTRY(vncLoginPassword), false);
   gsize vncLoginPassOutLen = 0;
   unsigned char * vncLoginPassTemp = g_base64_decode(con->vncLoginPass->str, &vncLoginPassOutLen);
-  gtk_entry_set_text(GTK_ENTRY(settings->vncLoginPassword), (const char *)vncLoginPassTemp);
+  gtk_entry_set_text(GTK_ENTRY(vncLoginPassword), (const char *)vncLoginPassTemp);
   g_free(vncLoginPassTemp);
-  svSetTooltip(settings->vncLoginPassword, "The password used with VNC 'login' authentication");
+  svSetTooltip(vncLoginPassword, "The password used with VNC 'login' authentication");
 
   gtk_grid_attach(GTK_GRID(vncPage), lblVNCLoginPass, 1, 9, 1, 1);
-  gtk_grid_attach(GTK_GRID(vncPage), settings->vncLoginPassword, 2, 9, 3, 1);
+  gtk_grid_attach(GTK_GRID(vncPage), vncLoginPassword, 2, 9, 3, 1);
 
   // vnc quality
   GtkWidget * lblVNCQuality = gtk_label_new("VNC quality");
   gtk_widget_set_halign(lblVNCQuality, GTK_ALIGN_END);
-  settings->vncQuality = gtk_combo_box_text_new();
+  GtkWidget * vncQuality = gtk_combo_box_text_new();
+  g_hash_table_insert(ht, "vncQuality", vncQuality);
   if (preventConnectedEditing)
-    gtk_widget_set_sensitive(GTK_WIDGET(settings->vncQuality), false);
+    gtk_widget_set_sensitive(GTK_WIDGET(vncQuality), false);
 
-  gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(settings->vncQuality), "Low");
-  gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(settings->vncQuality), "Medium");
-  gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(settings->vncQuality), "Full");
-  gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(settings->vncQuality), "Default");
+  gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(vncQuality), "Low");
+  gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(vncQuality), "Medium");
+  gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(vncQuality), "Full");
+  gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(vncQuality), "Default");
 
-  gtk_combo_box_set_active(GTK_COMBO_BOX(settings->vncQuality), con->quality);
-  svSetTooltip(settings->vncQuality, "The remote host's displayed image quality");
+  gtk_combo_box_set_active(GTK_COMBO_BOX(vncQuality), con->quality);
+  svSetTooltip(vncQuality, "The remote host's displayed image quality");
 
   gtk_grid_attach(GTK_GRID(vncPage), lblVNCQuality, 1, 10, 1, 1);
-  gtk_grid_attach(GTK_GRID(vncPage), settings->vncQuality, 2, 10, 3, 1);
+  gtk_grid_attach(GTK_GRID(vncPage), vncQuality, 2, 10, 3, 1);
 
   // vnc lossy encoding
   GtkWidget * lblVNCLossy = gtk_label_new("VNC lossy encoding");
   gtk_widget_set_halign(lblVNCLossy, GTK_ALIGN_END);
-  settings->vncLossyEncoding = gtk_check_button_new();
+  GtkWidget * vncLossyEncoding = gtk_check_button_new();
+  g_hash_table_insert(ht, "vncLossyEncoding", vncLossyEncoding);
   if (preventConnectedEditing)
-    gtk_widget_set_sensitive(GTK_WIDGET(settings->vncLossyEncoding), false);
-  if (con->lossyEncoding)
-    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(settings->vncLossyEncoding), true);
-  svSetTooltip(settings->vncLossyEncoding, "Enables the remote host's lossy encoding");
+    gtk_widget_set_sensitive(GTK_WIDGET(vncLossyEncoding), false);
+  gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(vncLossyEncoding), con->lossyEncoding);
+  svSetTooltip(vncLossyEncoding, "Enables the remote host's lossy encoding");
 
   gtk_grid_attach(GTK_GRID(vncPage), lblVNCLossy, 1, 11, 1, 1);
-  gtk_grid_attach(GTK_GRID(vncPage), settings->vncLossyEncoding, 2, 11, 3, 1);
+  gtk_grid_attach(GTK_GRID(vncPage), vncLossyEncoding, 2, 11, 3, 1);
 
   // vnc scaling
   GtkWidget * lblVNCScaling = gtk_label_new("VNC scaling");
   gtk_widget_set_halign(lblVNCScaling, GTK_ALIGN_END);
-  settings->vncScaling = gtk_check_button_new();
-  if (con->scale)
-    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(settings->vncScaling), true);
-  svSetTooltip(settings->vncScaling, "Scales the remote host's display");
+  GtkWidget * vncScaling = gtk_check_button_new();
+  g_hash_table_insert(ht, "vncScaling", vncScaling);
+  gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(vncScaling), con->scale);
+  svSetTooltip(vncScaling, "Scales the remote host's display");
 
   gtk_grid_attach(GTK_GRID(vncPage), lblVNCScaling, 1, 12, 1, 1);
-  gtk_grid_attach(GTK_GRID(vncPage), settings->vncScaling, 2, 12, 3, 1);
+  gtk_grid_attach(GTK_GRID(vncPage), vncScaling, 2, 12, 3, 1);
 
   //
   gtk_notebook_append_page(GTK_NOTEBOOK(editTab), vncPage, lblVNCTab);
@@ -1403,48 +1456,51 @@ void svShowConnectionEditWindow (Connection * con)
   // ssh name
   GtkWidget * lblSSHName = gtk_label_new("SSH username");
   gtk_widget_set_halign(lblSSHName, GTK_ALIGN_END);
-  settings->sshUsername = gtk_entry_new();
+  GtkWidget * sshUsername = gtk_entry_new();
+  g_hash_table_insert(ht, "sshUsername", sshUsername);
   if (preventConnectedEditing)
-    gtk_widget_set_sensitive(GTK_WIDGET(settings->sshUsername), false);
-  gtk_entry_set_width_chars(GTK_ENTRY(settings->sshUsername), 30);
-  gtk_entry_set_text(GTK_ENTRY(settings->sshUsername), con->sshUser->str);
-  svSetTooltip(settings->sshUsername, "The username used for the remote host's SSH server");
+    gtk_widget_set_sensitive(GTK_WIDGET(sshUsername), false);
+  gtk_entry_set_width_chars(GTK_ENTRY(sshUsername), 30);
+  gtk_entry_set_text(GTK_ENTRY(sshUsername), con->sshUser->str);
+  svSetTooltip(sshUsername, "The username used for the remote host's SSH server");
 
   gtk_grid_attach(GTK_GRID(sshPage), lblSSHName, 1, 1, 1, 1);
-  gtk_grid_attach(GTK_GRID(sshPage), settings->sshUsername, 2, 1, 3, 1);
+  gtk_grid_attach(GTK_GRID(sshPage), sshUsername, 2, 1, 3, 1);
 
   // ssh port
   GtkWidget * lblSSHPort = gtk_label_new("SSH port");
   gtk_widget_set_halign(lblSSHPort, GTK_ALIGN_END);
-  settings->sshPort = gtk_entry_new();
+  GtkWidget * sshPort = gtk_entry_new();
+  g_hash_table_insert(ht, "sshPort", sshPort);
   if (preventConnectedEditing)
-    gtk_widget_set_sensitive(GTK_WIDGET(settings->sshPort), false);
-  gtk_entry_set_width_chars(GTK_ENTRY(settings->sshPort), 10);
-  gtk_entry_set_text(GTK_ENTRY(settings->sshPort), con->sshPort->str);
-  svSetTooltip(settings->sshPort, "The remote host's numbered SSH server's port");
+    gtk_widget_set_sensitive(GTK_WIDGET(sshPort), false);
+  gtk_entry_set_width_chars(GTK_ENTRY(sshPort), 10);
+  gtk_entry_set_text(GTK_ENTRY(sshPort), con->sshPort->str);
+  svSetTooltip(sshPort, "The remote host's numbered SSH server's port");
 
   gtk_grid_attach(GTK_GRID(sshPage), lblSSHPort, 1, 2, 1, 1);
-  gtk_grid_attach(GTK_GRID(sshPage), settings->sshPort, 2, 2, 3, 1);
+  gtk_grid_attach(GTK_GRID(sshPage), sshPort, 2, 2, 3, 1);
 
   // ssh private key
   GtkWidget * lblSSHPrivKey = gtk_label_new("SSH private key (if any)");
   gtk_widget_set_halign(lblSSHPrivKey, GTK_ALIGN_END);
-  settings->sshPrivateKey = gtk_entry_new();
+  GtkWidget * sshPrivateKey = gtk_entry_new();
+  g_hash_table_insert(ht, "sshPrivateKey", sshPrivateKey);
   if (preventConnectedEditing)
-    gtk_widget_set_sensitive(GTK_WIDGET(settings->sshPrivateKey), false);
-  gtk_entry_set_width_chars(GTK_ENTRY(settings->sshPrivateKey), 30);
-  gtk_entry_set_text(GTK_ENTRY(settings->sshPrivateKey), con->sshPrivKeyfile->str);
-  svSetTooltip(settings->sshPrivateKey, "The private key (if any) used to authenticate on the remote "
+    gtk_widget_set_sensitive(GTK_WIDGET(sshPrivateKey), false);
+  gtk_entry_set_width_chars(GTK_ENTRY(sshPrivateKey), 30);
+  gtk_entry_set_text(GTK_ENTRY(sshPrivateKey), con->sshPrivKeyfile->str);
+  svSetTooltip(sshPrivateKey, "The private key (if any) used to authenticate on the remote "
     "host's SSH server");
 
   GtkWidget * btnSSHPrivKey = gtk_button_new_with_label("...");
   if (preventConnectedEditing)
     gtk_widget_set_sensitive(GTK_WIDGET(btnSSHPrivKey), false);
-  g_signal_connect(btnSSHPrivKey, "clicked", G_CALLBACK(svHandleConnectionSSHPrivKey), settings);
+  g_signal_connect(btnSSHPrivKey, "clicked", G_CALLBACK(svHandleConnectionSSHPrivKey), ht);
   svSetTooltip(btnSSHPrivKey, "Click to select a private key for the remote host's SSH server");
 
   gtk_grid_attach(GTK_GRID(sshPage), lblSSHPrivKey, 1, 4, 1, 1);
-  gtk_grid_attach(GTK_GRID(sshPage), settings->sshPrivateKey, 2, 4, 1, 1);
+  gtk_grid_attach(GTK_GRID(sshPage), sshPrivateKey, 2, 4, 1, 1);
   gtk_grid_attach(GTK_GRID(sshPage), btnSSHPrivKey, 3, 4, 1, 1);
 
   //
@@ -1469,35 +1525,37 @@ void svShowConnectionEditWindow (Connection * con)
   // - enabled
   GtkWidget * lblCmd1Enabled = gtk_label_new("Enabled");
   gtk_widget_set_halign(lblCmd1Enabled, GTK_ALIGN_END);
-  settings->cmd1Enabled = gtk_check_button_new();
-  if (con->customCmd1Enabled)
-    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(settings->cmd1Enabled), true);
-  svSetTooltip(settings->cmd1Enabled, "Enables custom command 1");
+  GtkWidget * cmd1Enabled = gtk_check_button_new();
+  g_hash_table_insert(ht, "cmd1Enabled", cmd1Enabled);
+  gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(cmd1Enabled), con->customCmd1Enabled);
+  svSetTooltip(cmd1Enabled, "Enables custom command 1");
 
   gtk_grid_attach(GTK_GRID(gridCmd1), lblCmd1Enabled, 1, 2, 1, 1);
-  gtk_grid_attach(GTK_GRID(gridCmd1), settings->cmd1Enabled, 2, 2, 1, 1);
+  gtk_grid_attach(GTK_GRID(gridCmd1), cmd1Enabled, 2, 2, 1, 1);
 
   // - label
   GtkWidget * lblCmd1Label = gtk_label_new("Label");
   gtk_widget_set_halign(lblCmd1Label, GTK_ALIGN_END);
-  settings->cmd1Label = gtk_entry_new();
-  gtk_entry_set_width_chars(GTK_ENTRY(settings->cmd1Label), 30);
-  gtk_entry_set_text(GTK_ENTRY(settings->cmd1Label), con->customCmd1Label->str);
-  svSetTooltip(settings->cmd1Label, "The displayed menu label for custom command 1");
+  GtkWidget * cmd1Label = gtk_entry_new();
+  g_hash_table_insert(ht, "cmd1Label", cmd1Label);
+  gtk_entry_set_width_chars(GTK_ENTRY(cmd1Label), 30);
+  gtk_entry_set_text(GTK_ENTRY(cmd1Label), con->customCmd1Label->str);
+  svSetTooltip(cmd1Label, "The displayed menu label for custom command 1");
 
   gtk_grid_attach(GTK_GRID(gridCmd1), lblCmd1Label, 1, 3, 1, 1);
-  gtk_grid_attach(GTK_GRID(gridCmd1), settings->cmd1Label, 2, 3, 1, 1);
+  gtk_grid_attach(GTK_GRID(gridCmd1), cmd1Label, 2, 3, 1, 1);
 
   // - command
   GtkWidget * lblCmd1 = gtk_label_new("Command");
   gtk_widget_set_halign(lblCmd1, GTK_ALIGN_END);
-  settings->cmd1 = gtk_entry_new();
-  gtk_entry_set_width_chars(GTK_ENTRY(settings->cmd1), 30);
-  gtk_entry_set_text(GTK_ENTRY(settings->cmd1), con->customCmd1->str);
-  svSetTooltip(settings->cmd1, "The actual command that is run");
+  GtkWidget * cmd1 = gtk_entry_new();
+  g_hash_table_insert(ht, "cmd1", cmd1);
+  gtk_entry_set_width_chars(GTK_ENTRY(cmd1), 30);
+  gtk_entry_set_text(GTK_ENTRY(cmd1), con->customCmd1->str);
+  svSetTooltip(cmd1, "The actual command that is run");
 
   gtk_grid_attach(GTK_GRID(gridCmd1), lblCmd1, 1, 4, 1, 1);
-  gtk_grid_attach(GTK_GRID(gridCmd1), settings->cmd1, 2, 4, 1, 1);
+  gtk_grid_attach(GTK_GRID(gridCmd1), cmd1, 2, 4, 1, 1);
 
   // command 2
   GtkWidget * frameCmd2 = gtk_frame_new("Command 2");
@@ -1511,35 +1569,37 @@ void svShowConnectionEditWindow (Connection * con)
   // - enabled
   GtkWidget * lblCmd2Enabled = gtk_label_new("Enabled");
   gtk_widget_set_halign(lblCmd2Enabled, GTK_ALIGN_END);
-  settings->cmd2Enabled = gtk_check_button_new();
-  if (con->customCmd2Enabled)
-    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(settings->cmd2Enabled), true);
-  svSetTooltip(settings->cmd2Enabled, "Enables custom command 2");
+  GtkWidget * cmd2Enabled = gtk_check_button_new();
+  g_hash_table_insert(ht, "cmd2Enabled", cmd2Enabled);
+  gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(cmd2Enabled), con->customCmd2Enabled);
+  svSetTooltip(cmd2Enabled, "Enables custom command 2");
 
   gtk_grid_attach(GTK_GRID(gridCmd2), lblCmd2Enabled, 1, 2, 1, 1);
-  gtk_grid_attach(GTK_GRID(gridCmd2), settings->cmd2Enabled, 2, 2, 1, 1);
+  gtk_grid_attach(GTK_GRID(gridCmd2), cmd2Enabled, 2, 2, 1, 1);
 
   // - label
   GtkWidget * lblCmd2Label = gtk_label_new("Label");
   gtk_widget_set_halign(lblCmd2Label, GTK_ALIGN_END);
-  settings->cmd2Label = gtk_entry_new();
-  gtk_entry_set_width_chars(GTK_ENTRY(settings->cmd2Label), 30);
-  gtk_entry_set_text(GTK_ENTRY(settings->cmd2Label), con->customCmd2Label->str);
-  svSetTooltip(settings->cmd2Label, "The displayed menu label for custom command 2");
+  GtkWidget * cmd2Label = gtk_entry_new();
+  g_hash_table_insert(ht, "cmd2Label", cmd2Label);
+  gtk_entry_set_width_chars(GTK_ENTRY(cmd2Label), 30);
+  gtk_entry_set_text(GTK_ENTRY(cmd2Label), con->customCmd2Label->str);
+  svSetTooltip(cmd2Label, "The displayed menu label for custom command 2");
 
   gtk_grid_attach(GTK_GRID(gridCmd2), lblCmd2Label, 1, 3, 1, 1);
-  gtk_grid_attach(GTK_GRID(gridCmd2), settings->cmd2Label, 2, 3, 1, 1);
+  gtk_grid_attach(GTK_GRID(gridCmd2), cmd2Label, 2, 3, 1, 1);
 
   // - command
   GtkWidget * lblCmd2 = gtk_label_new("Command");
   gtk_widget_set_halign(lblCmd2, GTK_ALIGN_END);
-  settings->cmd2 = gtk_entry_new();
-  gtk_entry_set_width_chars(GTK_ENTRY(settings->cmd2), 30);
-  gtk_entry_set_text(GTK_ENTRY(settings->cmd2), con->customCmd2->str);
-  svSetTooltip(settings->cmd2, "The actual command that is run");
+  GtkWidget * cmd2 = gtk_entry_new();
+  g_hash_table_insert(ht, "cmd2", cmd2);
+  gtk_entry_set_width_chars(GTK_ENTRY(cmd2), 30);
+  gtk_entry_set_text(GTK_ENTRY(cmd2), con->customCmd2->str);
+  svSetTooltip(cmd2, "The actual command that is run");
 
   gtk_grid_attach(GTK_GRID(gridCmd2), lblCmd2, 1, 4, 1, 1);
-  gtk_grid_attach(GTK_GRID(gridCmd2), settings->cmd2, 2, 4, 1, 1);
+  gtk_grid_attach(GTK_GRID(gridCmd2), cmd2, 2, 4, 1, 1);
 
   // command 3
   GtkWidget * frameCmd3 = gtk_frame_new("Command 3");
@@ -1553,35 +1613,37 @@ void svShowConnectionEditWindow (Connection * con)
   // - enabled
   GtkWidget * lblCmd3Enabled = gtk_label_new("Enabled");
   gtk_widget_set_halign(lblCmd3Enabled, GTK_ALIGN_END);
-  settings->cmd3Enabled = gtk_check_button_new();
-  if (con->customCmd3Enabled)
-    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(settings->cmd3Enabled), true);
-  svSetTooltip(settings->cmd3Enabled, "Enables custom command 3");
+  GtkWidget * cmd3Enabled = gtk_check_button_new();
+  g_hash_table_insert(ht, "cmd3Enabled", cmd3Enabled);
+  gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(cmd3Enabled), con->customCmd3Enabled);
+  svSetTooltip(cmd3Enabled, "Enables custom command 3");
 
   gtk_grid_attach(GTK_GRID(gridCmd3), lblCmd3Enabled, 1, 2, 1, 1);
-  gtk_grid_attach(GTK_GRID(gridCmd3), settings->cmd3Enabled, 2, 2, 1, 1);
+  gtk_grid_attach(GTK_GRID(gridCmd3), cmd3Enabled, 2, 2, 1, 1);
 
   // - label
   GtkWidget * lblCmd3Label = gtk_label_new("Label");
   gtk_widget_set_halign(lblCmd3Label, GTK_ALIGN_END);
-  settings->cmd3Label = gtk_entry_new();
-  gtk_entry_set_width_chars(GTK_ENTRY(settings->cmd3Label), 30);
-  gtk_entry_set_text(GTK_ENTRY(settings->cmd3Label), con->customCmd3Label->str);
-  svSetTooltip(settings->cmd3Label, "The displayed label for custom command 3");
+  GtkWidget * cmd3Label = gtk_entry_new();
+  g_hash_table_insert(ht, "cmd3Label", cmd3Label);
+  gtk_entry_set_width_chars(GTK_ENTRY(cmd3Label), 30);
+  gtk_entry_set_text(GTK_ENTRY(cmd3Label), con->customCmd3Label->str);
+  svSetTooltip(cmd3Label, "The displayed label for custom command 3");
 
   gtk_grid_attach(GTK_GRID(gridCmd3), lblCmd3Label, 1, 3, 1, 1);
-  gtk_grid_attach(GTK_GRID(gridCmd3), settings->cmd3Label, 2, 3, 1, 1);
+  gtk_grid_attach(GTK_GRID(gridCmd3), cmd3Label, 2, 3, 1, 1);
 
   // - command
   GtkWidget * lblCmd3 = gtk_label_new("Command");
   gtk_widget_set_halign(lblCmd3, GTK_ALIGN_END);
-  settings->cmd3 = gtk_entry_new();
-  gtk_entry_set_width_chars(GTK_ENTRY(settings->cmd3), 30);
-  gtk_entry_set_text(GTK_ENTRY(settings->cmd3), con->customCmd3->str);
-  svSetTooltip(settings->cmd3, "The actual command run");
+  GtkWidget * cmd3 = gtk_entry_new();
+  g_hash_table_insert(ht, "cmd3", cmd3);
+  gtk_entry_set_width_chars(GTK_ENTRY(cmd3), 30);
+  gtk_entry_set_text(GTK_ENTRY(cmd3), con->customCmd3->str);
+  svSetTooltip(cmd3, "The actual command run");
 
   gtk_grid_attach(GTK_GRID(gridCmd3), lblCmd3, 1, 4, 1, 1);
-  gtk_grid_attach(GTK_GRID(gridCmd3), settings->cmd3, 2, 4, 1, 1);
+  gtk_grid_attach(GTK_GRID(gridCmd3), cmd3, 2, 4, 1, 1);
 
   //
   gtk_notebook_append_page(GTK_NOTEBOOK(editTab), customCmdsPage, lblCmdsTab);
@@ -1596,15 +1658,16 @@ void svShowConnectionEditWindow (Connection * con)
   GtkWidget * btnSave = gtk_button_new_with_label("Save");
   gtk_widget_set_size_request(btnSave, 110, -1);
   svSetTooltip(btnSave, "Click to save these settings");
-  g_signal_connect(btnSave, "clicked", G_CALLBACK(svHandleConnectionSettingsSave), settings);
+  g_signal_connect(btnSave, "clicked", G_CALLBACK(svHandleConnectionEditButtons), ht);
 
   gtk_box_pack_end(GTK_BOX(boxButtons), btnSave, false, false, 3);
 
   // cancel
   GtkWidget * btnCancel = gtk_button_new_with_label("Cancel");
+  g_hash_table_insert(ht, "btnCancel", btnCancel);
   gtk_widget_set_size_request(btnCancel, 110, -1);
   svSetTooltip(btnCancel, "Click to abandon any changes.  Caution: Any changes will be lost!");
-  g_signal_connect(btnCancel, "clicked", G_CALLBACK(svHandleConnectionSettingsCancel), settings);
+  g_signal_connect(btnCancel, "clicked", G_CALLBACK(svHandleConnectionEditButtons), ht);
 
   gtk_box_pack_end(GTK_BOX(boxButtons), btnCancel, false, false, 3);
 
@@ -1612,12 +1675,12 @@ void svShowConnectionEditWindow (Connection * con)
   gtk_container_add(GTK_CONTAINER(boxEditParent), boxButtons);
 
   // show everything
-  gtk_widget_show_all(settings->settingsWin);
+  gtk_widget_show_all(win);
 
-  gtk_window_present(GTK_WINDOW(settings->settingsWin));
+  gtk_window_present(GTK_WINDOW(win));
 
   // focus the first entry
-  gtk_widget_grab_focus(settings->connectionName);
+  gtk_widget_grab_focus(connectionName);
 }
 
 
@@ -1657,17 +1720,28 @@ void svHandleMainWinChange (GtkWidget * widget, GdkEventWindowState * event, gpo
 void svSetMenuItemTooltips ()
 {
   // set tooltips
-  svSetTooltip(app->toolsItems->requestUpdate, "Asks the remote host to send an updated screen");
-  svSetTooltip(app->toolsItems->sendEnteredKeys, "Sends entered or pasted keys to the remote host");
-  svSetTooltip(app->toolsItems->sendCAD, "Sends the Control+Alt+Delete key combination to the remote host");
-  svSetTooltip(app->toolsItems->sendCSE, "Sends the Control+Shift+Esc key combination to the remote host");
-  svSetTooltip(app->toolsItems->addNew, "Adds a new connection to the connection list");
-  svSetTooltip(app->toolsItems->fullscreen, "Toggles app fullscreen mode");
-  svSetTooltip(app->toolsItems->listenMode, "Toggles reverse VNC (listening) mode");
-  svSetTooltip(app->toolsItems->screenshot, "Takes a screenshot of the remote host");
-  svSetTooltip(app->toolsItems->scanMode, "Toggles timed scan mode");
-  svSetTooltip(app->toolsItems->appOptions, "Displays the app preferences window");
-  svSetTooltip(app->toolsItems->quit, "Closes all connections and quits the app");
+  svSetTooltip((GtkWidget *)g_hash_table_lookup(app->toolsItems, "requestUpdate"),
+    "Asks the remote host to send an updated screen");
+  svSetTooltip((GtkWidget *)g_hash_table_lookup(app->toolsItems, "sendEnteredKeys"),
+    "Sends entered or pasted keys to the remote host");
+  svSetTooltip((GtkWidget *)g_hash_table_lookup(app->toolsItems, "sendCAD"),
+    "Sends the Control+Alt+Delete key combination to the remote host");
+  svSetTooltip((GtkWidget *)g_hash_table_lookup(app->toolsItems, "sendCSE"),
+    "Sends the Control+Shift+Esc key combination to the remote host");
+  svSetTooltip((GtkWidget *)g_hash_table_lookup(app->toolsItems, "addNew"),
+    "Adds a new connection to the connection list");
+  svSetTooltip((GtkWidget *)g_hash_table_lookup(app->toolsItems, "fullscreen"),
+    "Toggles app fullscreen mode");
+  svSetTooltip((GtkWidget *)g_hash_table_lookup(app->toolsItems, "listenMode"),
+    "Toggles reverse VNC (listening) mode");
+  svSetTooltip((GtkWidget *)g_hash_table_lookup(app->toolsItems, "screenshot"),
+    "Takes a screenshot of the remote host");
+  svSetTooltip((GtkWidget *)g_hash_table_lookup(app->toolsItems, "scanMode"),
+    "Toggles timed scan mode");
+  svSetTooltip((GtkWidget *)g_hash_table_lookup(app->toolsItems, "appOptions"),
+    "Displays the app preferences window");
+  svSetTooltip((GtkWidget *)g_hash_table_lookup(app->toolsItems, "quit"),
+    "Closes all connections and quits the app");
 }
 
 
@@ -1743,8 +1817,7 @@ void svHandleListenModeMenuItem ()
   if (app->listenMode)
   {
     // change listen mode tools menu item text
-    gtk_menu_item_set_label(GTK_MENU_ITEM(app->toolsItems->listenMode), "Disable _listen mode");
-    //gtk_window_set_title(GTK_WINDOW(app->mainWin), "SpiritVNC (Listen Mode)");
+    gtk_menu_item_set_label(GTK_MENU_ITEM(g_hash_table_lookup(app->toolsItems, "listenMode")), "Disable _listen mode");
 
     // change listen toolbutton to 'enabled' image
     if (app->listenImage)
@@ -1774,7 +1847,7 @@ void svHandleListenModeMenuItem ()
   else
   {
     // change listen mode tools menu item text
-    gtk_menu_item_set_label(GTK_MENU_ITEM(app->toolsItems->listenMode), "Enable _listen mode");
+    gtk_menu_item_set_label(GTK_MENU_ITEM(g_hash_table_lookup(app->toolsItems, "listenMode")), "Enable _listen mode");
     gtk_window_set_title(GTK_WINDOW(app->mainWin), "SpiritVNC");
 
     // change listen toolbutton to 'disabled' image
@@ -1859,7 +1932,7 @@ void svCreateGUI (GtkApplication * gtkApp)
 
   // request update
   GtkWidget * upd = gtk_menu_item_new_with_label("Request _update");
-  app->toolsItems->requestUpdate = upd;
+  g_hash_table_insert(app->toolsItems, "requestUpdate", upd);
   gtk_menu_item_set_use_underline(GTK_MENU_ITEM(upd), true);
   gtk_widget_set_sensitive(GTK_WIDGET(upd), false);
   gtk_menu_shell_append(GTK_MENU_SHELL(submenu), upd);
@@ -1869,7 +1942,7 @@ void svCreateGUI (GtkApplication * gtkApp)
 
   // send submenu
   GtkWidget * ssm = gtk_menu_item_new_with_label("Send...");
-  app->toolsItems->send = ssm;
+  g_hash_table_insert(app->toolsItems, "send", ssm);
   gtk_menu_item_set_use_underline(GTK_MENU_ITEM(ssm), true);
   gtk_widget_set_sensitive(GTK_WIDGET(ssm), true);
   gtk_menu_shell_append(GTK_MENU_SHELL(submenu), ssm);
@@ -1882,7 +1955,7 @@ void svCreateGUI (GtkApplication * gtkApp)
 
   // send entered keystrokes
   GtkWidget * sks = gtk_menu_item_new_with_label("_Keys...");
-  app->toolsItems->sendEnteredKeys = sks;
+  g_hash_table_insert(app->toolsItems, "sendEnteredKeys", sks);
   gtk_menu_item_set_use_underline(GTK_MENU_ITEM(sks), true);
   gtk_widget_set_sensitive(GTK_WIDGET(sks), false);
   gtk_menu_shell_append(GTK_MENU_SHELL(sendMen), sks);
@@ -1890,7 +1963,7 @@ void svCreateGUI (GtkApplication * gtkApp)
 
   // send ctrl+alt+del
   GtkWidget * cad = gtk_menu_item_new_with_label("Ctrl+_Alt+Del");
-  app->toolsItems->sendCAD = cad;
+  g_hash_table_insert(app->toolsItems, "sendCAD", cad);
   gtk_menu_item_set_use_underline(GTK_MENU_ITEM(cad), true);
   gtk_widget_set_sensitive(GTK_WIDGET(cad), false);
   gtk_menu_shell_append(GTK_MENU_SHELL(sendMen), cad);
@@ -1898,7 +1971,7 @@ void svCreateGUI (GtkApplication * gtkApp)
 
   // send ctrl+shift+esc
   GtkWidget * cse = gtk_menu_item_new_with_label("Ctrl+Shift+_Esc");
-  app->toolsItems->sendCSE = cse;
+  g_hash_table_insert(app->toolsItems, "sendCSE", cse);
   gtk_menu_item_set_use_underline(GTK_MENU_ITEM(cse), true);
   gtk_widget_set_sensitive(GTK_WIDGET(cse), false);
   gtk_menu_shell_append(GTK_MENU_SHELL(sendMen), cse);
@@ -1908,7 +1981,7 @@ void svCreateGUI (GtkApplication * gtkApp)
 
   // screenshot
   GtkWidget * scr = gtk_menu_item_new_with_label("_Screenshot");
-  app->toolsItems->screenshot = scr;
+  g_hash_table_insert(app->toolsItems, "screenshot", scr);
   gtk_menu_item_set_use_underline(GTK_MENU_ITEM(scr), true);
   gtk_widget_set_sensitive(GTK_WIDGET(scr), false);
   gtk_menu_shell_append(GTK_MENU_SHELL(submenu), scr);
@@ -1920,7 +1993,7 @@ void svCreateGUI (GtkApplication * gtkApp)
 
   // listen mode
   GtkWidget * lis = gtk_menu_item_new_with_label("Enable _listen mode");
-  app->toolsItems->listenMode = lis;
+  g_hash_table_insert(app->toolsItems, "listenMode", lis);
   gtk_menu_item_set_use_underline(GTK_MENU_ITEM(lis), true);
   gtk_widget_set_sensitive(GTK_WIDGET(lis), true);
   gtk_menu_shell_append(GTK_MENU_SHELL(submenu), lis);
@@ -1928,7 +2001,7 @@ void svCreateGUI (GtkApplication * gtkApp)
 
   // scan mode
   GtkWidget * scn = gtk_menu_item_new_with_label("Enable scan _mode");
-  app->toolsItems->scanMode = scn;
+  g_hash_table_insert(app->toolsItems, "scanMode", scn);
   gtk_menu_item_set_use_underline(GTK_MENU_ITEM(scn), true);
   gtk_widget_set_sensitive(GTK_WIDGET(scn), true);
   gtk_menu_shell_append(GTK_MENU_SHELL(submenu), scn);
@@ -1936,14 +2009,14 @@ void svCreateGUI (GtkApplication * gtkApp)
 
   // add new
   GtkWidget * add = gtk_menu_item_new_with_label("Add _new connection...");
-  app->toolsItems->addNew = add;
+  g_hash_table_insert(app->toolsItems, "addNew", add);
   gtk_menu_item_set_use_underline(GTK_MENU_ITEM(add), true);
   gtk_menu_shell_append(GTK_MENU_SHELL(submenu), add);
   g_signal_connect(add, "activate", G_CALLBACK(svHandleAddNewConnectionMenuItem), NULL);
 
   // fullscreen
   GtkWidget * ful = gtk_menu_item_new_with_label("Toggle _fullscreen");
-  app->toolsItems->fullscreen = ful;
+  g_hash_table_insert(app->toolsItems, "fullscreen", ful);
   gtk_menu_item_set_use_underline(GTK_MENU_ITEM(ful), true);
   gtk_widget_set_sensitive(GTK_WIDGET(ful), true);
   gtk_menu_shell_append(GTK_MENU_SHELL(submenu), ful);
@@ -1954,14 +2027,14 @@ void svCreateGUI (GtkApplication * gtkApp)
 
   // app options
   GtkWidget * ao = gtk_menu_item_new_with_label("_Preferences");
-  app->toolsItems->appOptions = ao;
+  g_hash_table_insert(app->toolsItems, "appOptions", ao);
   gtk_menu_item_set_use_underline(GTK_MENU_ITEM(ao), true);
   gtk_menu_shell_append(GTK_MENU_SHELL(submenu), ao);
   g_signal_connect(ao, "activate", G_CALLBACK(svShowAppOptionsWindow), NULL);
 
   // quit
   GtkWidget * qui = gtk_menu_item_new_with_label("_Quit");
-  app->toolsItems->quit = qui;
+  g_hash_table_insert(app->toolsItems, "quit", qui);
   gtk_menu_item_set_use_underline(GTK_MENU_ITEM(qui), true);
   gtk_menu_shell_append(GTK_MENU_SHELL(submenu), qui);
   g_signal_connect(qui, "activate", G_CALLBACK(svDoQuit), NULL);
@@ -1983,7 +2056,7 @@ void svCreateGUI (GtkApplication * gtkApp)
 
   // about
   GtkWidget * abt = gtk_menu_item_new_with_label("_About");
-  app->toolsItems->about = abt;
+  g_hash_table_insert(app->toolsItems, "about", abt);
   gtk_menu_item_set_use_underline(GTK_MENU_ITEM(abt), true);
   gtk_menu_shell_append(GTK_MENU_SHELL(helpSub), abt);
   g_signal_connect(abt, "activate", G_CALLBACK(svShowAboutWindow), NULL);
@@ -2263,8 +2336,6 @@ void svConfigRead ()
     g_string_free(errStr, true);
   }
 
-  //printf("DEBUG: svConfigRead - readError pointer = %p\n", (void*)readError);
-
   if (readError)
     g_error_free(readError);
 
@@ -2504,6 +2575,10 @@ void svConfigRead ()
     if (strcmp(strProp->str, "lastconnecttime") == 0)
       g_string_assign(con->lastConnectTime, strVal->str);
 
+    // view-only / read-only
+    if (strcmp(strProp->str, "viewonly") == 0)
+      con->viewOnly = svStringToBool(strVal->str);
+
     // free up gstrings
     g_string_free(strProp, true);
     g_string_free(strVal, true);
@@ -2554,7 +2629,8 @@ void svConfigWrite ()
 
   // header
   g_string_append(outStr, "# SpiritVNC - GTK 3 version\n");
-  g_string_append(outStr, "# 2022-2026 Will Brokenbourgh - to God be the glory!\n#\n");
+  g_string_append(outStr, "# 2022-2026 Will Brokenbourgh - to God be the glory!\n");
+  g_string_append(outStr, "# Generated by app version "SV_APP_VERSION"\n#\n");
 
   // config version
   g_string_append(outStr, "configver=1.0\n");
@@ -2600,7 +2676,7 @@ void svConfigWrite ()
     GtkListBoxRow * row = l->data;
     GtkWidget * box = gtk_bin_get_child(GTK_BIN(row));
 
-    Connection * con = g_object_get_data(G_OBJECT(box), "con");
+    const Connection * con = g_object_get_data(G_OBJECT(box), "con");
 
     if (!con || con->name->len == 0 || con->type == SV_TYPE_VNC_REVERSE)
       continue;
@@ -2632,6 +2708,7 @@ void svConfigWrite ()
     g_string_append_printf(outStr, "customcmd3enabled=%i\n", svIntFromBool(con->customCmd3Enabled));
     g_string_append_printf(outStr, "customcmd3label=%s\n", con->customCmd3Label->str);
     g_string_append_printf(outStr, "customcmd3=%s\n", con->customCmd3->str);
+    g_string_append_printf(outStr, "viewonly=%i\n", svIntFromBool(con->viewOnly));
 
     // empty line after this connection
     g_string_append(outStr, "\n");
@@ -2787,7 +2864,7 @@ void svEndAllConnections ()
     GtkListBoxRow * row = l->data;
     GtkWidget * box = gtk_bin_get_child(GTK_BIN(row));
 
-    Connection * con = g_object_get_data(G_OBJECT(box), "con");
+    const Connection * con = g_object_get_data(G_OBJECT(box), "con");
 
     if (con && con->state == SV_STATE_CONNECTED && con->vncObj)
       vnc_display_close(VNC_DISPLAY(con->vncObj));
@@ -2944,7 +3021,7 @@ Connection * svGetSelectedConnectionListConnection ()
 void svHandleRequestUpdateMenuItem (GtkMenuItem * gMenuItem, gpointer userData)
 {
   // get the connections glist item for this index
-  Connection * con = svGetSelectedConnectionListConnection();
+  const Connection * con = svGetSelectedConnectionListConnection();
 
   if (!con || con->name->len == 0)
     return;
@@ -2957,7 +3034,7 @@ void svHandleRequestUpdateMenuItem (GtkMenuItem * gMenuItem, gpointer userData)
 void svHandleSendCADMenuItem (GtkMenuItem * gMenuItem, gpointer userData)
 {
   // get the connections glist item for this index
-  Connection * con = svGetSelectedConnectionListConnection();
+  const Connection * con = svGetSelectedConnectionListConnection();
   if (!con || con->name->len == 0)
     return;
 
@@ -2975,7 +3052,7 @@ void svHandleSendCADMenuItem (GtkMenuItem * gMenuItem, gpointer userData)
 void svHandleSendCSEMenuItem (GtkMenuItem * gMenuItem, gpointer userData)
 {
   // get the connections glist item for this index
-  Connection * con = svGetSelectedConnectionListConnection();
+  const Connection * con = svGetSelectedConnectionListConnection();
 
   if (!con || con->name->len == 0)
     return;
@@ -2993,10 +3070,6 @@ void svHandleSendCSEMenuItem (GtkMenuItem * gMenuItem, gpointer userData)
 /* menu item handler - shows 'send keys' window */
 void svHandleSendEnteredKeystrokesMenuItem (GtkMenuItem * gMenuItem, gpointer userData)
 {
-  SendKeysObj * obj = g_new0(SendKeysObj, 1);
-  if (!obj)
-    return;
-
   // get the connections glist item for this index
   Connection * con = svGetSelectedConnectionListConnection();
   if (!con || con->name->len == 0)
@@ -3050,11 +3123,15 @@ void svHandleSendEnteredKeystrokesMenuItem (GtkMenuItem * gMenuItem, gpointer us
   // add textview to scroller
   gtk_container_add(GTK_CONTAINER(scroll), textIn);
 
-  // ------------------- set obj fields --------------
-  obj->type = SV_SENDKEYS_TYPE_ENTRY;
-  obj->win = sendKeysWin;
-  obj->textView = textIn;
-  obj->con = con;
+  // ------------------- set sendkeys data --------------
+  GHashTable * ht = g_hash_table_new(NULL, NULL);
+  if (ht)
+  {
+    g_hash_table_insert(ht, "type", SV_SENDKEYS_TYPE_ENTRY);
+    g_hash_table_insert(ht, "win", sendKeysWin);
+    g_hash_table_insert(ht, "textView", textIn);
+    g_hash_table_insert(ht, "con", con);
+  }
 
   // ------------------- send / cancel buttons -------------------
   GtkWidget * boxButtons = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 5);
@@ -3063,14 +3140,15 @@ void svHandleSendEnteredKeystrokesMenuItem (GtkMenuItem * gMenuItem, gpointer us
   GtkWidget * btnSend = gtk_button_new_with_label("Send");
   gtk_widget_set_size_request(btnSend, 110, -1);
   svSetTooltip(btnSend, "Click to send this text");
-  g_signal_connect(btnSend, "clicked", G_CALLBACK(svHandleSendEnteredKeystrokesSend), obj);
+  g_signal_connect(btnSend, "clicked", G_CALLBACK(svHandleSendEnteredKeystrokesButtons), ht);
   gtk_box_pack_end(GTK_BOX(boxButtons), btnSend, false, false, 3);
 
   // cancel
   GtkWidget * btnCancel = gtk_button_new_with_label("Cancel");
+  g_hash_table_insert(ht, "btnCancel", btnCancel);
   gtk_widget_set_size_request(btnCancel, 110, -1);
   svSetTooltip(btnCancel, "Click to close this window without sending");
-  g_signal_connect(btnCancel, "clicked", G_CALLBACK(svHandleSendEnteredKeystrokesCancel), obj);
+  g_signal_connect(btnCancel, "clicked", G_CALLBACK(svHandleSendEnteredKeystrokesButtons), ht);
   gtk_box_pack_end(GTK_BOX(boxButtons), btnCancel, false, false, 3);
   //
   gtk_container_add(GTK_CONTAINER(boxParent), boxButtons);
@@ -3228,7 +3306,7 @@ void svHandleEditMenuItem (GtkMenuItem * gMenuItem, gpointer userData)
 /* menu item handler - call connection editor */
 void svHandleSyncClipboardMenuItem (GtkMenuItem * gMenuItem, gpointer userData)
 {
-  Connection * con = (Connection *)userData;
+  const Connection * con = (Connection *)userData;
   if (!con || !con->clipboard || con->clipboard->len < 1)
     return;
 
@@ -3244,7 +3322,7 @@ void svHandleSyncClipboardMenuItem (GtkMenuItem * gMenuItem, gpointer userData)
 /* menu item handler - get right-clicked connection's f12 macro (NOT on clipboard!) */
 void svHandleF12GetMacroMenuItem (GtkMenuItem * gMenuItem, gpointer userData)
 {
-  Connection * con = (Connection *)userData;
+  const Connection * con = (Connection *)userData;
 
   if (!con)
     return;
@@ -3256,8 +3334,7 @@ void svHandleF12GetMacroMenuItem (GtkMenuItem * gMenuItem, gpointer userData)
 /* menu item handler - set right-clicked connection's f12 macro (NOT from clipboard!) */
 void svHandleF12PutMacroMenuItem (GtkMenuItem * gMenuItem, gpointer userData)
 {
-  Connection * con = (Connection *)userData;
-
+  const Connection * con = (Connection *)userData;
   if (!con)
     return;
 
@@ -3422,7 +3499,7 @@ void svHandleDeleteMenuItem (GtkMenuItem * gMenuItem, gpointer userData)
 
 
 /* menu item handler - add new connection */
-void svHandleAddNewConnectionMenuItem (GtkMenuItem * unused1, gpointer unused2)
+void svHandleAddNewConnectionMenuItem (GtkMenuItem *, gpointer)
 {
   app->addNewConnection = true;
 
@@ -3431,7 +3508,7 @@ void svHandleAddNewConnectionMenuItem (GtkMenuItem * unused1, gpointer unused2)
 
 
 /* menu item handler - toggle fullscreen */
-void svHandleFullscreenMenuItem (GtkMenuItem * unused1, gpointer unused2)
+void svHandleFullscreenMenuItem (GtkMenuItem *, gpointer)
 {
   // if fullscreen, unfullscreen and vice-versa
   if (app->fullscreen)
@@ -3552,7 +3629,7 @@ void svCancelScanMode (gboolean removeSource)
   app->scanMode = false;
 
   // change listen mode tools menu item text
-  gtk_menu_item_set_label(GTK_MENU_ITEM(app->toolsItems->scanMode), "Enable sca_n mode");
+  gtk_menu_item_set_label(GTK_MENU_ITEM(g_hash_table_lookup(app->toolsItems, "scanMode")), "Enable sca_n mode");
 
   // change listen toolbutton to 'enabled' image
   if (app->listenImage)
@@ -3572,6 +3649,7 @@ void svCancelScanMode (gboolean removeSource)
   }
 }
 
+
 /* menu item handler - toggle scan mode */
 void svHandleScanModeMenuItem (GtkMenuItem * unused1, gpointer unused2)
 {
@@ -3584,7 +3662,7 @@ void svHandleScanModeMenuItem (GtkMenuItem * unused1, gpointer unused2)
     if (svThereAreConnectedConnections())
     {
       // change listen mode tools menu item text
-      gtk_menu_item_set_label(GTK_MENU_ITEM(app->toolsItems->scanMode), "Disable sca_n mode");
+      gtk_menu_item_set_label(GTK_MENU_ITEM(g_hash_table_lookup(app->toolsItems, "scanMode")), "Disable sca_n mode");
 
       // change listen toolbutton to 'enabled' image
       if (app->listenImage)
@@ -3612,10 +3690,11 @@ void svHandleScanModeMenuItem (GtkMenuItem * unused1, gpointer unused2)
     svCancelScanMode(true);
 }
 
+
 /* menu item handler - do screenshot of current vnc connection */
 void svHandleScreenshotMenuItem (GtkMenuItem * unused1, gpointer unused2)
 {
-  Connection * con = svGetSelectedConnectionListConnection();
+  const Connection * con = svGetSelectedConnectionListConnection();
   if (!con)
     return;
 
@@ -3674,6 +3753,53 @@ void svHandleScreenshotMenuItem (GtkMenuItem * unused1, gpointer unused2)
 }
 
 
+void svHandleViewOnlyMenuItem (GtkMenuItem * gMenuItem, gpointer userData)
+{
+  if (!gMenuItem)
+    return;
+
+  Connection * con = (Connection *)userData;
+  if (!con)
+    return;
+
+  // get menu item's children
+  GList * children = gtk_container_get_children(GTK_CONTAINER(gMenuItem));
+  if (!children)
+    return;
+
+  // parent box is first child
+  GtkWidget * parentBox = (GtkWidget *)g_list_nth_data(children, 0);
+  if (!parentBox)
+    return;
+
+  // now get parent box's childre
+  GList * boxChildren = gtk_container_get_children(GTK_CONTAINER(parentBox));
+  if (!boxChildren)
+    return;
+
+  // checkbox is first child
+  GtkWidget * checkBox = (GtkWidget *)g_list_nth_data(boxChildren, 0);
+  if (!checkBox)
+    return;
+
+  // toggle view-only
+  con->viewOnly = !con->viewOnly;
+
+  // set the viewer now if it's connected
+  if (con->state == SV_STATE_CONNECTED && con->vncObj)
+    vnc_display_set_read_only(VNC_DISPLAY(con->vncObj), con->viewOnly);
+
+  // set the checkbox's checked state
+  gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(checkBox), con->viewOnly);
+
+  svConfigWrite();
+
+  // free lists
+  g_list_free(children);
+  g_list_free(boxChildren);
+}
+
+
 /* create connection right-click menu */
 void svConnectionRightClick (Connection * con)
 {
@@ -3713,7 +3839,32 @@ void svConnectionRightClick (Connection * con)
   gtk_menu_shell_append(GTK_MENU_SHELL(rightMenu), edit);
   g_signal_connect(edit, "activate", G_CALLBACK(svHandleEditMenuItem), con);
 
-  // f12 macro section
+   // f12 macro section
+  gtk_menu_shell_append(GTK_MENU_SHELL(rightMenu), gtk_separator_menu_item_new());
+
+  // view-only menu item
+  GtkWidget * viewOnly = gtk_menu_item_new_with_label("View only");
+  svSetTooltip(viewOnly, "Sets this connection to view-only (no mouse or keyboard events will be sent)");
+  gtk_menu_item_set_use_underline(GTK_MENU_ITEM(viewOnly), true);
+  gtk_widget_set_sensitive(GTK_WIDGET(viewOnly), true);
+  // remove menu item's original child
+  GtkWidget * origChild = gtk_bin_get_child(GTK_BIN(viewOnly));
+  gtk_container_remove(GTK_CONTAINER(viewOnly), origChild);
+  // make a box to put our checkbox and label into
+  GtkWidget * childBox = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 5);
+  // checkbox
+  GtkWidget * viewOnlyCheckbox = gtk_check_button_new();
+  gtk_box_pack_start(GTK_BOX(childBox), viewOnlyCheckbox, false, false, 0);
+  gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(viewOnlyCheckbox), con->viewOnly);
+  // label
+  GtkWidget * viewOnlyLabel = gtk_label_new("View only");
+  gtk_box_pack_start(GTK_BOX(childBox), viewOnlyLabel, false, false, 0);
+  //
+  gtk_container_add(GTK_CONTAINER(viewOnly), childBox);
+  gtk_menu_shell_append(GTK_MENU_SHELL(rightMenu), viewOnly);
+  g_signal_connect(viewOnly, "activate", G_CALLBACK(svHandleViewOnlyMenuItem), con);
+
+ // f12 macro section
   gtk_menu_shell_append(GTK_MENU_SHELL(rightMenu), gtk_separator_menu_item_new());
 
   // get f12 macro menu item
@@ -3874,7 +4025,6 @@ gpointer svConnectionInitWaiter (void * data)
 void svServerConnected (GtkWidget * vncObj)
 {
   Connection * con = svConnectionFromVNCObj(vncObj);
-
   if (!con)
     return;
 
@@ -3893,10 +4043,8 @@ void svServerConnected (GtkWidget * vncObj)
 void svServerDisconnected (GtkWidget * vncObj)
 {
   Connection * con = svConnectionFromVNCObj(vncObj);
-
   if (!con)
     return;
-
 
   // log
   GString * logStr = g_string_new(NULL);
@@ -3926,15 +4074,10 @@ void svServerDisconnected (GtkWidget * vncObj)
     manualDisconnect = true;
     con->state = SV_STATE_DISCONNECTED;
   }
-
   // timeout disconnect
-  //else if (con->state == SV_STATE_WAITING && con->state != SV_STATE_TIMEOUT && con->disconnectType != SV_DISC_VNC_ERROR &&
-    //con->disconnectType != SV_DISC_SSH_ERROR)
-    //con->state = SV_STATE_TIMEOUT;
   else if (con->state == SV_STATE_WAITING && con->disconnectType != SV_DISC_VNC_ERROR &&
     con->disconnectType != SV_DISC_SSH_ERROR)
     con->state = SV_STATE_TIMEOUT;
-
   // error
   else if (con->state == SV_STATE_ERROR || con->disconnectType == SV_DISC_VNC_ERROR || con->disconnectType == SV_DISC_SSH_ERROR)
     con->state = SV_STATE_ERROR;
@@ -3955,7 +4098,6 @@ void svServerError (VncConnection * conn, const char * message, void * data)
     return;
 
   Connection * con = (Connection *)data;
-
   if (!con)
     return;
 
@@ -3988,7 +4130,6 @@ void svServerError (VncConnection * conn, const char * message, void * data)
 void svServerInitialized (GtkWidget * vncObj)
 {
   Connection * con = svConnectionFromVNCObj(vncObj);
-
   if (!con)
     return;
 
@@ -4099,7 +4240,6 @@ void svServerAuthenticate (VncDisplay * display, GValueArray * credList)
   GString * logStr = g_string_new(NULL);
   g_string_printf(logStr, "Server authentication '%s - %s'", con->name->str, con->address->str);
   svLog(logStr->str, true);
-  //g_string_free(logStr, true);  // <<<--- NO, is used below!
 
   // set vnc login username, if any
   const char * loginUser = con->vncLoginUser->str;
@@ -4236,6 +4376,8 @@ gboolean svHandleKeyboard (GtkWidget * widget, GdkEventKey * event, gpointer dat
 {
   // get the selected connection
   Connection * con = svGetSelectedConnectionListConnection();
+  if (!con)
+    return false;
 
   // f8 - connection actions
   if (event->keyval == GDK_KEY_F8)
@@ -4284,18 +4426,16 @@ gboolean svHandleKeyboard (GtkWidget * widget, GdkEventKey * event, gpointer dat
     if (!con || con->name->len == 0)
       return false;
 
-    SendKeysObj * obj = g_new0(SendKeysObj, 1);
-    if (!obj)
-      return false;
+    GHashTable * ht = g_hash_table_new(NULL, NULL);
 
     // set the obj properties for 'OTHER' type
-    obj->type = SV_SENDKEYS_TYPE_OTHER;
-    obj->win = NULL;
-    obj->con = con;
-    obj->textToSend = g_string_new(con->f12Macro->str);
+    g_hash_table_insert(ht, "type", (void *)SV_SENDKEYS_TYPE_OTHER);
+    g_hash_table_insert(ht, "win", NULL);
+    g_hash_table_insert(ht, "con", con);
+    g_hash_table_insert(ht, "textToSend", g_string_new(con->f12Macro->str));
 
     // send the f12 macro
-    svHandleSendEnteredKeystrokesSend(NULL, obj);
+    svHandleSendEnteredKeystrokesButtons(NULL, ht);
 
     return true;  // stop further handling
   }
@@ -4382,7 +4522,7 @@ void svConnectionCreate (Connection * con)
 /* set error message on ssh failure */
 void svSetSSHLastErrorMessage (gpointer data)
 {
-  Connection * con = (Connection *)data;
+  const Connection * con = (Connection *)data;
   if (!con)
     return;
 
@@ -4418,7 +4558,6 @@ void svSetConnectionIconFromSSHError (gpointer data)
 gpointer svSSHMonitor (gpointer data)
 {
   Connection * con = (Connection *)data;
-
   if (!con)
     return NULL;
 
@@ -4473,7 +4612,6 @@ gpointer svSSHMonitor (gpointer data)
 gpointer svSSHConnectionCloser (gpointer data)
 {
   Connection * con = (Connection *)data;
-
   if (!con || !con->sshStdIn)
     return NULL;
 
@@ -4530,12 +4668,12 @@ void svConnectionEnd (Connection * con)
 /* set tools menu connection-related items state */
 void svSetToolsMenuItems(gboolean sState)
 {
-  gtk_widget_set_sensitive(GTK_WIDGET(app->toolsItems->requestUpdate), sState);
-  gtk_widget_set_sensitive(GTK_WIDGET(app->toolsItems->send), sState);
-  gtk_widget_set_sensitive(GTK_WIDGET(app->toolsItems->sendEnteredKeys), sState);
-  gtk_widget_set_sensitive(GTK_WIDGET(app->toolsItems->sendCAD), sState);
-  gtk_widget_set_sensitive(GTK_WIDGET(app->toolsItems->sendCSE), sState);
-  gtk_widget_set_sensitive(GTK_WIDGET(app->toolsItems->screenshot), sState);
+  gtk_widget_set_sensitive(GTK_WIDGET(g_hash_table_lookup(app->toolsItems, "requestUpdate")), sState);
+  gtk_widget_set_sensitive(GTK_WIDGET(g_hash_table_lookup(app->toolsItems, "send")), sState);
+  gtk_widget_set_sensitive(GTK_WIDGET(g_hash_table_lookup(app->toolsItems, "sendEnteredKeys")), sState);
+  gtk_widget_set_sensitive(GTK_WIDGET(g_hash_table_lookup(app->toolsItems, "sendCAD")), sState);
+  gtk_widget_set_sensitive(GTK_WIDGET(g_hash_table_lookup(app->toolsItems, "sendCSE")), sState);
+  gtk_widget_set_sensitive(GTK_WIDGET(g_hash_table_lookup(app->toolsItems, "screenshot")), sState);
 }
 
 
@@ -4546,7 +4684,7 @@ gboolean svFocusOnce (gpointer data)
   if (GTK_IS_WIDGET(w))
     gtk_widget_grab_focus(w);
 
-  return FALSE;  // run once, then stop
+  return false;  // run once, then stop
 }
 
 /* switch from one connection to another */
@@ -4664,6 +4802,9 @@ void svConnectionOpen (Connection * con)
       vnc_display_set_depth(VNC_DISPLAY(con->vncObj), VNC_DISPLAY_DEPTH_COLOR_DEFAULT);
   }
 
+  // set read-only
+  vnc_display_set_read_only(VNC_DISPLAY(con->vncObj), con->viewOnly);
+
   // set lossy encoding
   vnc_display_set_lossy_encoding(VNC_DISPLAY(con->vncObj), con->lossyEncoding);
 
@@ -4752,7 +4893,6 @@ void svShowAboutWindow ()
 gpointer svCreateSSHConnection (gpointer data)
 {
   Connection * con = (Connection *)data;
-
   if (!con)
     return NULL;
 

@@ -55,7 +55,7 @@
 
 #include <stdbool.h>
 
-#define SV_APP_VERSION "0.0.2"
+#define SV_APP_VERSION "0.0.3"
 
 // forward declarations
 typedef struct Connection Connection;
@@ -95,7 +95,8 @@ typedef struct Application
   GtkWidget * connectionActionsWindow;
 
   // objects
-  ToolsMenuItems * toolsItems;
+  //ToolsMenuItems * toolsItems;
+  GHashTable * toolsItems;
   Connection * selectedConnection;
   GString * f12Storage;
 
@@ -119,7 +120,7 @@ typedef struct Application
   GSource * listenSource;
   guint scanTimerSource;
 
-  // important paths that probably shouldn't be hard-coded
+  // important paths
   GString * appConfigDir;
   GString * appConfigFile;
   GString * appLogFile;
@@ -151,7 +152,6 @@ typedef struct Connection
   GString * sshUser;
   GString * sshPass;
   GString * sshPort;
-  //GString * sshPubKeyfile;
   GString * sshPrivKeyfile;
   GString * f12Macro;
   GString * quickNote;
@@ -171,87 +171,17 @@ typedef struct Connection
   GString * lastErrorMessage;
   GString * lastConnectTime;
   guint sshLocalPort;
-  FILE * sshCmdStream;
   GThread * sshThread;
   GThread * sshMonitorThread;
   GThread * sshCloseThread;
   gboolean sshContinue;
   GPid sshPid;
   gint sshStdIn;
-  FILE * sshStream;
   GString * clipboard;
   GtkWidget * settingsWin;
   gint listenFd;
+  gboolean viewOnly;
 } Connection;
-
-typedef struct
-{
-  Connection * con;
-  GtkWidget * settingsWin;
-  GtkWidget * connectionName;
-  GtkWidget * connectionGroup;
-  GtkWidget * remoteAddress;
-  GtkWidget * f12Macro;
-  GtkWidget * vncChoice;
-  GtkWidget * svncChoice;
-  GtkWidget * vncPort;
-  GtkWidget * vncPassword;
-  GtkWidget * vncLoginUsername;
-  GtkWidget * vncLoginPassword;
-  GtkWidget * vncQuality;
-  GtkWidget * vncLossyEncoding;
-  GtkWidget * vncScaling;
-  GtkWidget * sshUsername;
-  GtkWidget * sshPort;
-  GtkWidget * sshPublicKey;
-  GtkWidget * sshPrivateKey;
-  GtkWidget * cmd1Enabled;
-  GtkWidget * cmd1Label;
-  GtkWidget * cmd1;
-  GtkWidget * cmd2Enabled;
-  GtkWidget * cmd2Label;
-  GtkWidget * cmd2;
-  GtkWidget * cmd3Enabled;
-  GtkWidget * cmd3Label;
-  GtkWidget * cmd3;
-} ConnectionSettings;
-
-typedef struct AppOptions
-{
-  GtkWidget * optionsWin;
-  GtkWidget * showTooltips;
-  GtkWidget * logToFile;
-  GtkWidget * scanTimeout;
-  GtkWidget * vncWaitTime;
-  GtkWidget * sshWaitTime;
-  GtkWidget * sshCommand;
-} AppOptions;
-
-typedef struct ToolsMenuItems
-{
-  GtkWidget * requestUpdate;
-  GtkWidget * send;
-  GtkWidget * sendEnteredKeys;
-  GtkWidget * sendCAD;
-  GtkWidget * sendCSE;
-  GtkWidget * addNew;
-  GtkWidget * fullscreen;
-  GtkWidget * listenMode;
-  GtkWidget * scanMode;
-  GtkWidget * screenshot;
-  GtkWidget * appOptions;
-  GtkWidget * quit;
-  GtkWidget * about;
-} ToolsMenuItems;
-
-typedef struct SendKeysObj
-{
-  char type;
-  GString * textToSend;
-  GtkWidget * win;
-  GtkWidget * textView;
-  Connection * con;
-} SendKeysObj;
 
 enum ConnectionState
 {
@@ -313,6 +243,7 @@ void svFreeConnObject(Connection *);
 gboolean svThereAreConnectedConnections ();
 Connection * svGetSelectedConnectionListConnection ();
 void svHandleAddNewConnectionMenuItem (GtkMenuItem *, gpointer);
+void svHandleConnectionSettingsButtons (GtkButton *, gpointer);
 gboolean svHandleConnectionListClicks (GtkWidget *, GdkEvent *, void *);
 void svHandleConnectionSSHPrivKey (GtkButton *, gpointer);
 void svHandleDeleteMenuItem (GtkMenuItem *, gpointer);
@@ -322,7 +253,7 @@ void svHandleScanModeMenuItem (GtkMenuItem *, gpointer);
 void svHandleSendCADMenuItem (GtkMenuItem *, gpointer);
 void svHandleSendCSEMenuItem (GtkMenuItem *, gpointer);
 void svHandleSendEnteredKeystrokesMenuItem (GtkMenuItem *, gpointer);
-void svHandleSendEnteredKeystrokesSend (GtkButton *, gpointer);
+void svHandleSendEnteredKeystrokesButtons (GtkButton *, gpointer);
 void svHandleScreenshotMenuItem (GtkMenuItem *, gpointer);
 void svInitAppVars ();
 void svInitConnObject (Connection *);
